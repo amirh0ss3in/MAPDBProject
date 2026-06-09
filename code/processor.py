@@ -124,6 +124,7 @@ if __name__ == "__main__":
                 if f.status == 'finished':
                     result_json = f.result()
                     calc_time = time.time() - task["start"]
+                    result_json['calc_time'] = round(calc_time, 2)
                     print(f"   -> Batch {task['batch']} math finished in {calc_time:.2f}s! Pushing to Kafka...")
                     
                     producer.send('quax_processed', value=result_json)

@@ -123,6 +123,7 @@ if __name__ == "__main__":
                 
                 if f.status == 'finished':
                     result_json = f.result()
+                    result_json['calc_time'] = round(time.time() - task['start'], 2)
                     calc_time = time.time() - task["start"]
                     result_json['calc_time'] = round(calc_time, 2)
                     print(f"   -> Batch {task['batch']} math finished in {calc_time:.2f}s! Pushing to Kafka...")

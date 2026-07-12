@@ -140,7 +140,7 @@
 <div class="progress" id="progress"></div>
 <div class="deck" id="deck">
 
-  <!-- 1 · TITLE -->
+  <!-- 01 · TITLE -->
   <section class="slide active">
     <div class="title-wrap">
       <div class="glow"></div>
@@ -151,7 +151,7 @@
     </div>
   </section>
 
-  <!-- 2 · CHAPTER: THE DATA -->
+  <!-- 02 · CHAPTER 1: THE DATA -->
   <section class="slide chapter">
     <div class="ch-eye">Chapter 1 — The Data</div>
     <h2 style="font-size:clamp(1.7rem,4vw,3rem)">Where our batch is born</h2>
@@ -159,7 +159,7 @@
     <div class="ch-line"></div>
   </section>
 
-  <!-- 3 · PROBLEM -->
+  <!-- 03 · PROBLEM -->
   <section class="slide">
     <div class="eyebrow">The Problem</div>
     <h2>Chasing a whisper of dark matter</h2>
@@ -180,7 +180,7 @@
     <div class="hook"><div class="h-inner"><span class="q">Up next —</span> if one scan is just noise, how do we ever see the signal? There's a beautifully simple answer.</div></div>
   </section>
 
-  <!-- 4 · THE PHYSICS TRICK -->
+  <!-- 04 · THE PHYSICS TRICK -->
   <section class="slide">
     <div class="eyebrow">The Idea</div>
     <h2>Averaging turns noise into signal</h2>
@@ -189,7 +189,7 @@
     <div class="hook"><div class="h-inner"><span class="q">Up next —</span> don't take our word for it. Let's watch the signal appear, live.</div></div>
   </section>
 
-  <!-- 5 · INTERACTIVE: NOISE -> SIGNAL -->
+  <!-- 05 · INTERACTIVE: NOISE -> SIGNAL -->
   <section class="slide">
     <div class="eyebrow">Try it · Averaging</div>
     <h2>Watch the signal rise from the noise</h2>
@@ -206,7 +206,7 @@
     <div class="hook"><div class="h-inner"><span class="q">Handoff →</span> so one batch holds a real signal. Now, how does it travel from the detector to the code that averages it?</div></div>
   </section>
 
-  <!-- 6 · CHAPTER: THE PIPELINE -->
+  <!-- 06 · CHAPTER 2: THE PIPELINE -->
   <section class="slide chapter">
     <div class="ch-eye">Chapter 2 — The Pipeline</div>
     <h2 style="font-size:clamp(1.7rem,4vw,3rem)">How the batch travels</h2>
@@ -214,7 +214,7 @@
     <div class="ch-line"></div>
   </section>
 
-  <!-- 7 · ARCHITECTURE -->
+  <!-- 07 · ARCHITECTURE -->
   <section class="slide">
     <div class="eyebrow">Architecture</div>
     <h2>A chain of small services</h2>
@@ -225,11 +225,11 @@
       <div class="panel"><h3>Processor</h3><p>Does the FFT — the one swappable part (Dask or Spark)</p></div>
       <div class="panel"><h3>Dashboard</h3><p>Plots the finished spectrum live</p></div>
     </div>
-    <div class="note">The <strong>processor</strong> is the only piece we change between experiments. Everything else stays fixed — same producer, same Kafka, same dashboard — so any difference we measure comes from the engine alone.</div>
+    <div class="note">The <strong>processor</strong> is the piece we swap out to compare engines. Everything else stays fixed — same producer, same Kafka, same dashboard — so any difference we measure comes from the engine alone.</div>
     <div class="hook"><div class="h-inner"><span class="q">Up next —</span> why put a queue in the middle at all? Why not connect the pieces directly?</div></div>
   </section>
 
-  <!-- 8 · KAFKA -->
+  <!-- 08 · KAFKA -->
   <section class="slide">
     <div class="eyebrow">The Message Queue</div>
     <h2>Kafka absorbs the shocks</h2>
@@ -242,7 +242,7 @@
     <div class="hook"><div class="h-inner"><span class="q">Up next —</span> but there's a catch: what exactly do we put <em>on</em> that queue?</div></div>
   </section>
 
-  <!-- 9 · DESIGN DECISION -->
+  <!-- 09 · DESIGN DECISION -->
   <section class="slide">
     <div class="eyebrow">Design Decision</div>
     <h2>Send filenames, not files</h2>
@@ -289,7 +289,7 @@
     <div class="hook"><div class="h-inner"><span class="q">Handoff →</span> our batch reached the processor. The first engine we built to do that job was Dask.</div></div>
   </section>
 
-  <!-- 11 · CHAPTER: ENGINE ONE -->
+  <!-- 11 · CHAPTER 3: ENGINE ONE -->
   <section class="slide chapter">
     <div class="ch-eye">Chapter 3 — Engine One</div>
     <h2 style="font-size:clamp(1.7rem,4vw,3rem)">Dask does the work</h2>
@@ -309,26 +309,25 @@
     </div>
     <ul class="clean">
       <li>Reached through the university <strong>gate</strong> with an SSH ProxyJump, and passwordless SSH between master and workers</li>
-      <li><strong>Asynchronous</strong> by design — Dask fires off many batches at once instead of waiting for each to finish</li>
+      <li><strong>Asynchronous</strong> by design — the live processor fires off many batches at once instead of waiting for each to finish (the benchmarks later force it to wait anyway, on purpose — more on that soon)</li>
       <li>A pure-Python stack, so it's lightweight and quick to start</li>
-      <li>Spark later reuses this <strong>exact same topology</strong> — a Standalone cluster across the same three machines — so both engines get compared on equal footing</li>
     </ul>
-    <div class="hook"><div class="h-inner"><span class="q">Handoff →</span> Dask works well on paper. But is it the <em>right</em> tool, or just <em>a</em> tool? To find out, we need a rival — and a real benchmark.</div></div>
+    <div class="hook"><div class="h-inner"><span class="q">Handoff →</span> Dask works. But is it the <em>right</em> tool, or just <em>a</em> tool? To find out, we need a rival.</div></div>
   </section>
 
-  <!-- 13 · CHAPTER: ENGINE TWO -->
+  <!-- 13 · CHAPTER 4: ENGINE TWO -->
   <section class="slide chapter">
     <div class="ch-eye">Chapter 4 — Engine Two</div>
     <h2 style="font-size:clamp(1.7rem,4vw,3rem)">Rewind: what if it were Spark?</h2>
-    <p class="lead">The same batch, a second engine, and a benchmark we had to fix before we could trust it.</p>
+    <p class="lead">The same batch, a second engine, kept identical for a fair fight.</p>
     <div class="ch-line"></div>
   </section>
 
-  <!-- 15 · SPARK -->
+  <!-- 14 · SPARK -->
   <section class="slide">
-    <div class="eyebrow">Engine Two</div>
+    <div class="eyebrow">Engine Two · Setup</div>
     <h2>The same batch, now on Spark</h2>
-    <p class="body">Let's rewind. Our batch just went through Dask — but what if <strong>Apache Spark</strong> had done the job instead? We rebuilt the processor on Spark, keeping <em>everything</em> else identical: the same Kafka topics, the same S3 source, and crucially the same NumPy FFT. Spark runs as a genuine Standalone cluster across the same three machines as Dask — no shortcuts.</p>
+    <p class="body">Let's rewind. Our batch just went through Dask — but what if <strong>Apache Spark</strong> had done the job instead? We rebuilt the processor on Spark, keeping <em>everything</em> else identical: the same Kafka topics, the same S3 source, and crucially the same NumPy FFT. Spark runs as a genuine Standalone cluster across the same three machines as Dask — the exact same topology, no shortcuts, so the two engines are compared on equal footing.</p>
     <div class="vs" style="margin-top:.5rem">
       <div class="panel good">
         <h3>✓ Same FFT, one task per batch</h3>
@@ -340,18 +339,26 @@
       </div>
     </div>
     <div class="note">And to check whether "distributed" was even worth it, we added a third contender: a plain <strong>baseline</strong> with no engine at all — the function just called directly on the master.</div>
-    <div class="hook"><div class="h-inner"><span class="q">Up next —</span> three configurations, same batch. Time to benchmark them — the first time, we got it wrong.</div></div>
+    <div class="hook"><div class="h-inner"><span class="q">Up next —</span> three configurations, same batch. Time to benchmark them.</div></div>
+  </section>
+
+  <!-- 15 · CHAPTER 5: THE BENCHMARK WE GOT WRONG -->
+  <section class="slide chapter">
+    <div class="ch-eye">Chapter 5 — The Benchmark We Got Wrong</div>
+    <h2 style="font-size:clamp(1.7rem,4vw,3rem)">The first attempt looked clean</h2>
+    <p class="lead">It wasn't. Here's how we found out, and why it applies to all three configurations equally.</p>
+    <div class="ch-line"></div>
   </section>
 
   <!-- 16 · THE FIRST BENCHMARK -->
   <section class="slide">
     <div class="eyebrow">Benchmark · Take One</div>
-    <h2>The first attempt looked clean</h2>
-    <p class="body">Version one: submit one batch, wait for it to finish, record the time, submit the next. 20 batches, once, per engine. The result looked like a tidy, publishable finding — all three configurations tied on speed, Spark showing the highest timing variance.</p>
+    <h2>Submit, wait, record, repeat</h2>
+    <p class="body">Version one: submit one batch, wait for it to finish, record the time, submit the next — for all three configurations, including forcing Dask's normally-asynchronous <code>client.submit</code> to block on <code>.result()</code> so the comparison stayed apples-to-apples. 20 batches, once, per configuration. The result looked like a tidy, publishable finding: all three tied on speed, Spark showing the highest timing variance.</p>
     <div class="grid3" style="margin:.5rem 0 .6rem">
-      <div class="stat"><div class="num" style="color:var(--pink)">1.44<span style="font-size:.85rem">s</span></div><div class="lbl">Baseline (1 run)</div></div>
-      <div class="stat"><div class="num" style="color:var(--green)">1.44<span style="font-size:.85rem">s</span></div><div class="lbl">Dask (1 run)</div></div>
-      <div class="stat"><div class="num" style="color:var(--accent)">1.42<span style="font-size:.85rem">s</span></div><div class="lbl">Spark (1 run)</div></div>
+      <div class="stat"><div class="num" style="color:var(--pink)">1.39<span style="font-size:.85rem">s</span></div><div class="lbl">Baseline (1 run)</div></div>
+      <div class="stat"><div class="num" style="color:var(--green)">1.32<span style="font-size:.85rem">s</span></div><div class="lbl">Dask (1 run)</div></div>
+      <div class="stat"><div class="num" style="color:var(--accent)">1.54<span style="font-size:.85rem">s</span></div><div class="lbl">Spark (1 run)</div></div>
     </div>
     <div class="note y">Clean-looking numbers, one run each. It felt done. It wasn't — see the next slide.</div>
     <div class="hook"><div class="h-inner"><span class="q">Up next —</span> two things about this "clean" result don't survive a second look.</div></div>
@@ -372,13 +379,13 @@
         <p style="color:var(--muted);font-size:.86rem;line-height:1.55">Submit one batch, wait, submit the next — <strong>only one task is ever in flight</strong>. Dask and Spark's whole reason to exist is scheduling many tasks across workers at once. A test that never allows that was never going to find a benefit of distributing, whether or not one exists.</p>
       </div>
     </div>
-    <div class="note r">So the fix isn't a better statistic bolted onto the same test. It's two honest, differently-designed benchmarks — one that fixes Crack 1, one that fixes Crack 2.</div>
+    <div class="note r">Both cracks apply equally to baseline, Dask, and Spark — this isn't a Spark problem, it's a test-design problem. So the fix isn't a better statistic bolted onto the same test. It's two honest, differently-designed benchmarks — one that fixes Crack 1, one that fixes Crack 2.</div>
     <div class="hook"><div class="h-inner"><span class="q">Up next —</span> Benchmark A, done properly.</div></div>
   </section>
 
-  <!-- 18 · CHAPTER: TWO BENCHMARKS -->
+  <!-- 18 · CHAPTER 6: TWO HONEST BENCHMARKS -->
   <section class="slide chapter">
-    <div class="ch-eye">Chapter 5 — Two Honest Benchmarks</div>
+    <div class="ch-eye">Chapter 6 — Two Honest Benchmarks</div>
     <h2 style="font-size:clamp(1.7rem,4vw,3rem)">Ask it two different ways</h2>
     <p class="lead">What does one batch cost? And what happens when they pile up?</p>
     <div class="ch-line"></div>
@@ -449,7 +456,7 @@
       <div class="panel"><h3 style="color:var(--green)">Dask</h3><p>Cold 1.68 ± 0.20s · warm 1.45 ± 0.06s<br>Stdev 0.18 ± 0.05 · CPU ~52% · Mem ~57%</p></div>
       <div class="panel"><h3 style="color:var(--accent)">Spark</h3><p>Cold 3.24 ± 0.39s · warm 1.54 ± 0.05s<br>Stdev 0.33 ± 0.08 · CPU ~58% · Mem ~68%</p></div>
     </div>
-    <div class="note g">Two claims now hold up across <strong>all 5 independent trials</strong>, not just one: Spark is consistently slower to cold-start (JVM warm-up), and Spark is consistently more variable batch-to-batch — every single one of its 5 trials beats every baseline/Dask trial on both counts. The original suspicion was right; it just needed real evidence.</div>
+    <div class="note g">Two claims now hold up across <strong>all 5 independent trials</strong>, not just one: Spark is consistently slower to cold-start (JVM warm-up), and Spark is consistently more variable batch-to-batch — every single one of its 5 trials beats every baseline/Dask trial on both counts. The original suspicion was right; it just needed real evidence, not one lucky (or unlucky) run.</div>
     <div class="hook"><div class="h-inner"><span class="q">Up next —</span> this still can't tell us what happens when batches pile up. That needs Benchmark B.</div></div>
   </section>
 
@@ -558,7 +565,7 @@
 
 </div>
 
-<div class="counter"><b id="cur">1</b> / <span id="total">25</span></div>
+<div class="counter"><b id="cur">1</b> / <span id="total">26</span></div>
 <div class="hint">← → or space</div>
 <div class="nav"><button id="prev" aria-label="Previous">←</button><button id="next" aria-label="Next">→</button></div>
 
@@ -624,7 +631,7 @@
   }
   document.getElementById('playPipe').addEventListener('click',playPipe);
 
-  /* 4. TRIALS CONVERGE (Benchmark A, real per-trial within-trial stdev values) */
+  /* 3. TRIALS CONVERGE (Benchmark A, real per-trial within-trial stdev values) */
   const TRIAL_STDEV = {
     baseline: [0.239, 0.040, 0.210, 0.303, 0.158],
     dask:     [0.221, 0.105, 0.183, 0.163, 0.228],
@@ -661,7 +668,7 @@
   document.getElementById('resetTrials').addEventListener('click',()=>{ trialsRevealed=0; renderTrials(); });
   renderTrials();
 
-  /* 5. THROUGHPUT RACE (Benchmark B, real relative speeds compressed in time) */
+  /* 4. THROUGHPUT RACE (Benchmark B, real relative speeds compressed in time) */
   const LOAD_CONFIGS = [
     {key:'bs', fillId:'bsFill', timeId:'bsTime', totalSeconds:125.4},
     {key:'bc', fillId:'bcFill', timeId:'bcTime', totalSeconds:88.6},
@@ -679,11 +686,9 @@
     const maxDurationMs = Math.max(...LOAD_CONFIGS.map(c=>c.totalSeconds))/COMPRESS*1000;
     function frame(now){
       const elapsedMs = now - loadStart;
-      let allDone = true;
       for(const cfg of LOAD_CONFIGS){
         const durMs = cfg.totalSeconds/COMPRESS*1000;
         const frac = Math.min(1, elapsedMs/durMs);
-        if(frac<1) allDone=false;
         document.getElementById(cfg.fillId).style.width = (frac*100)+'%';
         document.getElementById(cfg.timeId).textContent = Math.floor(frac*100)+' / 100';
       }

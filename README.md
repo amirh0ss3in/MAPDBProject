@@ -9,7 +9,7 @@ The processing step is implemented on **two independent distributed engines — 
 - **Per-task overhead** — what does one batch cost, engine vs. no engine? (repeated trials, statistically real)
 - **Throughput under load** — when batches pile up faster than one machine can process them, does distribution actually help?
 
-For the full build log — infrastructure, design decisions, and the reasoning behind them — see **[what_we_did.md](what_we_did.md)**.
+For the full build log — infrastructure, design decisions, and the reasoning behind them — see **[what_we_did.md](what_we_did.md)**. For a visual walkthrough of the whole story (including the flawed first benchmark and how it got fixed), open **[quax_story-2.html](quax_story-2.html)** in a browser.
 
 ## Project Layout
 
@@ -17,7 +17,9 @@ For the full build log — infrastructure, design decisions, and the reasoning b
 Project/
 ├── README.md              — this file
 ├── what_we_did.md          — full reproducible build guide
+├── quax_story-2.html       — interactive presentation deck
 ├── requirements.txt        — Python dependencies
+├── .gitignore
 ├── code/
 │   ├── producer.py                    — Kafka work-order emitter (live pipeline; --batches/--interval for benchmark use)
 │   ├── processor.py                   — Dask processor (live pipeline)
@@ -40,7 +42,7 @@ Project/
 │   │
 │   └── run_with_env.sh                — loads S3 keys from ~/.bashrc without printing them (used by the run_* scripts)
 ├── results/
-│   ├── overhead/           — Experiment A: benchmark_{baseline,dask,spark}_trial{1..5}.csv
+│   ├── overhead/           — Experiment A: {baseline,dask,spark}_trial{1..5}.csv
 │   └── load/               — Experiment B: {baseline_sequential,baseline_concurrent,dask,spark}.csv
 └── tests/                  — development helper scripts
     ├── cluster_check.py

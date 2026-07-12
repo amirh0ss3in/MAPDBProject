@@ -2,9 +2,9 @@
 
 ## Overview
 
-This guide documents the full build of the QUAX pipeline: a streaming ETL system that fetches high-frequency IQ radio data from S3, computes the FFT, and visualizes the power spectrum in real time — plus the two distributed-engine implementations (Dask, Apache Spark) and the benchmark that compares them against each other and against a no-distribution baseline.
+This guide documents the full build of the QUAX pipeline: a streaming ETL system that fetches high-frequency IQ radio data from S3, computes the FFT, and visualizes the power spectrum in real time — plus the two distributed-engine implementations (Dask, Apache Spark) and the two benchmarks that compare them against each other and against a no-distribution baseline.
 
-> **Goal:** Build the pipeline, then answer a concrete question — for this workload, does the choice of distributed engine (Dask vs. Spark) actually matter, and how does either compare to just not distributing at all?
+> **Goal:** Build the pipeline, then answer a concrete question — for this workload, does the choice of distributed engine (Dask vs. Spark) actually matter, and how does either compare to just not distributing at all? The answer turned out to depend entirely on *how* you ask it — see Steps 8-10.
 
 ---
 
@@ -108,15 +108,17 @@ echo 'export S3_ACCESS_KEY="your_access_key"' >> ~/.bashrc
 echo 'export S3_SECRET_KEY="your_secret_key"' >> ~/.bashrc
 ```
 
+Because non-interactive scripted SSH commands don't source `~/.bashrc` by default, the benchmark/orchestration scripts (Steps 8-10) load just the two `S3_*` export lines via a small wrapper, `code/run_with_env.sh`, instead of the whole file — so the keys are never printed or logged anywhere.
+
 ### 4.2 The Producer (`code/producer.py`)
-> **Design Choice:** We do *not* download the 64MB binary files and push them through Kafka. Pushing heavy binary data causes severe network bottlenecks. Instead, we send lightweight JSON "work orders" containing the S3 filenames, one every 5 seconds to simulate the real QUAX hardware's DAQ rate.
+> **Design Choice:** We do *not* download the 64MB binary files and push them through Kafka. Pushing heavy binary data causes severe network bottlenecks. Instead, we send lightweight JSON "work orders" containing the S3 filenames, by default one every 5 seconds to simulate the real QUAX hardware's DAQ rate. It also accepts `--batches`/`--interval` overrides, used by the benchmarks in Steps 8-10 to send batches faster than real hardware would.
 
 ### 4.3 The Processor — Dask Engine (`code/processor.py`)
 > **Design Choice:** We securely inject the S3 keys into the remote Dask workers using `worker_options={"env": ...}` so they don't leak into the Dask task graph, and use non-blocking Kafka polling so the master can continually submit tasks without waiting for previous ones to finish.
 
 The cluster is a `dask.distributed.SSHCluster` spanning `master`, `worker1`, and `worker2` — Dask genuinely uses all three machines.
 
-> **Known limitation:** `worker_options={"env": {...}}` passes the S3 keys to each worker's `Nanny` process as part of its spec, which ends up visible in the worker's own `ps aux` output on the remote VM (i.e. any local user on `worker1`/`worker2` could read them). This is a pre-existing pattern in the original design; hardening it (e.g. via Dask's `Security` config or a secrets file instead of inline env) is a good follow-up but out of scope here.
+> **Known limitation:** `worker_options={"env": {...}}` passes the S3 keys to each worker's `Nanny` process as part of its spec, which ends up visible in the worker's own `ps aux` output on the remote VM. This is a pre-existing pattern in the original design; hardening it (e.g. via Dask's `Security` config or a secrets file instead of inline env) is a good follow-up but out of scope here.
 
 ### 4.4 The Dashboard (`code/dashboard.py`)
 > **Design Choice:** Streamlit wraps a Pandas DataFrame to render real-time UI updates consumed directly from the `quax_processed` Kafka topic.
@@ -161,8 +163,6 @@ The worker function is byte-for-byte the same physics as the Dask version. The S
 ```python
 from pyspark.sql import SparkSession
 
-# S3 keys are injected into the executors' environment, the same pattern
-# as Dask's worker_options={"env": ...}.
 spark = SparkSession.builder \
     .appName("QUAX-Spark-Processor") \
     .config("spark.executorEnv.S3_ACCESS_KEY", S3_ACCESS) \
@@ -170,13 +170,11 @@ spark = SparkSession.builder \
     .getOrCreate()
 sc = spark.sparkContext
 
-# Hand one whole batch to Spark: it ships the work_order to an executor,
-# runs process_physics_data there, and brings the result back.
 rdd = sc.parallelize([work_order], numSlices=1)
 result_json = rdd.map(process_physics_data).collect()[0]
 ```
 
-`processor_spark.py` (the live pipeline script) deliberately uses Spark's default local mode — the live demo only needs one machine to keep up with a batch every 5 seconds. The benchmark, however, needs a real cluster to be a fair comparison against Dask; that's built next.
+`processor_spark.py` (the live pipeline script) deliberately uses Spark's default local mode — the live demo only needs one machine. The benchmarks need a real cluster to be a fair comparison against Dask; that's built next.
 
 > **Note (installing PySpark):** the shared `pyvenv` was created without pip, so `pip` had to be bootstrapped once on `master` (`curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && python get-pip.py`) before `pip install pyspark` would work. `pyspark==4.1.2` was installed this way on `master`; it was later installed on `worker1`/`worker2` too (Step 7) using `uv pip install pyspark==4.1.2` directly, which needs no such bootstrap.
 
@@ -184,7 +182,7 @@ result_json = rdd.map(process_physics_data).collect()[0]
 
 ## Step 7: A Real 3-Node Spark Cluster
 
-> **Why?** For the benchmark to be a fair comparison with Dask's 3-node `SSHCluster`, Spark also needs to actually run across all three machines — not just the master.
+> **Why?** For the benchmarks to be a fair comparison with Dask's 3-node `SSHCluster`, Spark also needs to actually run across all three machines — not just the master.
 
 Java 17 and `pyspark==4.1.2` (matching the master's version) were installed on `worker1` and `worker2`:
 ```bash
@@ -193,7 +191,7 @@ source ~/pyvenv/bin/activate
 uv pip install pyspark==4.1.2
 ```
 
-A Spark Standalone cluster is then started — the master daemon on `master`, and a worker daemon on each of `worker1`/`worker2` registering against it:
+A Spark Standalone cluster is then started — the master daemon on `master`, and a worker daemon on each of `worker1`/`worker2` registering against it. This is only needed while a Spark benchmark is actually running; it's not left up permanently.
 
 ```bash
 # On master — start the Spark master daemon
@@ -208,50 +206,92 @@ export PYSPARK_PYTHON=~/pyvenv/bin/python
 $SPARK_HOME/bin/spark-class org.apache.spark.deploy.worker.Worker spark://master:7077 --webui-port 8081 &
 ```
 
-`code/benchmark_spark.py` connects to this cluster with `.master("spark://master:7077")` (instead of the implicit local default that `processor_spark.py` uses), with `spark.pyspark.python` pinned to the shared venv so executors have the same NumPy/boto3 environment as the driver.
+Every Spark benchmark script connects with `.master("spark://master:7077")` (instead of the implicit local default that `processor_spark.py` uses), with `spark.pyspark.python` pinned to the shared venv so executors have the same NumPy/boto3 environment as the driver.
 
 ---
 
-## Step 8: The Benchmark — Baseline vs Dask vs Spark
+## Step 8: First Benchmark Attempt — and Why It Was Flawed
 
-> **Why?** "It runs" is not the same as "it's the right tool," and neither is meaningful without knowing what you get over not distributing at all. Three configurations were instrumented identically and run on the same data:
+The first version of this benchmark ran `benchmark_baseline.py`, `benchmark_dask.py`, and `benchmark_spark.py` once each, synchronously (submit one batch, block until its result, submit the next), for 20 batches, and reported cold start / warm average / timing stdev / CPU / memory. It found all three engines essentially tied on speed, with Spark showing the highest timing variance.
 
-- **Baseline** (`code/benchmark_baseline.py`) — no distribution engine at all; `process_physics_data` is called directly, in-process, on the master node. This is the reference point.
-- **Dask** (`code/benchmark_dask.py`) — the 3-node `SSHCluster` (`master` + `worker1` + `worker2`).
-- **Spark** (`code/benchmark_spark.py`) — the 3-node Spark Standalone cluster from Step 7.
+Two problems surfaced on closer inspection:
 
-### 8.1 Methodology
+1. **Statistical fragility.** Spark's "highest variance" claim rested on a single run of 20 batches. One outlier batch (a 2.65s spike against a typical 1.25–1.68s band) was doing almost all the work of that claim — remove it and Spark's stdev collapsed to match the others. A single run isn't enough evidence to call something a repeatable engine characteristic.
+2. **Structural flaw.** The benchmark is synchronous by construction: only one batch is ever in flight, on any engine. Dask and Spark's actual value proposition — scheduling many concurrent tasks across workers — was never exercised. Combined with the workload being I/O-bound (S3 download dominates a FFT that's only a few ms of real compute), "no speedup over baseline" was close to guaranteed by the test's own construction, not a discovery.
 
-- **Same workload:** the same producer streamed the same 20 batches of real QUAX data to each engine (one batch every 5s).
-- **Same timing method:** each processor runs **synchronously** — submit one batch, block until its result, record the time. (Dask's `processor.py` is asynchronous by default; the benchmark version blocks on each `future.result()` instead, so all three are measured the same way.)
-- **Same metrics:** for every batch, processing time, CPU %, and memory % were logged with `psutil` and written to `results/benchmark_<engine>_results.csv`.
-- **Same physics:** `process_physics_data` is byte-for-byte identical across all three scripts, so the benchmark measures engine overhead, not algorithm differences.
+This led to a redesign: keep the synchronous benchmark (it's still the right tool for isolating pure per-task overhead), but run it properly — repeated trials instead of one — and add a second, different benchmark that can actually show a difference if one exists: concurrent load. Steps 9 and 10 are that redesign.
 
-> **Reading the numbers correctly:** the meaningful metric is *per-batch processing time after warm-up*. Total wall-clock time is dominated by the producer's deliberate 5s gap between batches, not by the engines, so it isn't a measure of speed.
+---
 
-**Files:**
-- `code/benchmark_baseline.py`, `code/benchmark_dask.py`, `code/benchmark_spark.py` — the three instrumented processors
-- `results/benchmark_baseline_results.csv`, `results/benchmark_dask_results.csv`, `results/benchmark_spark_results.csv` — raw per-batch results (20 batches each)
-- `code/summarize_benchmarks.py` — recomputes the table below from the raw CSVs
+## Step 9: Benchmark A — Per-Task Overhead, Done Properly
 
-### 8.2 Results (warm state, i.e. after the first batch)
+**Fix for the statistical fragility:** run **5 independent trials** of 20 batches per engine instead of 1, and report mean and spread *across trials* — not a single run's internal stdev.
 
-| Metric            | Baseline | Dask   | Spark  |
-| ----------------- | -------- | ------ | ------ |
-| Cold start        | 2.54 s   | 2.64 s | 4.35 s |
-| Warm avg / batch  | 1.39 s   | 1.32 s | 1.54 s |
-| Timing stdev      | 0.11     | 0.19   | 0.29   |
-| Avg CPU           | ~23%     | ~2%    | ~8%    |
-| Avg memory        | ~59%     | ~60%   | ~68%   |
+**Fix for Kafka's offset semantics across trials:** each `KafkaConsumer` in the benchmark scripts uses `auto_offset_reset='latest'` with no consumer group, so it only sees messages sent *after* it starts polling. `code/run_trials.sh <engine> <n_trials>` drives this correctly for each trial: start the benchmark script in the background, poll its log for "Listening for work orders" (the readiness signal) before firing the producer, run `producer.py --batches 20 --interval 0.1` (fast — no need to simulate real 5s hardware cadence for an overhead benchmark), wait for the benchmark process to exit, then move to the next trial.
 
-### 8.3 Interpretation
+> **Gotcha hit during implementation:** Python fully buffers stdout when it isn't attached to a terminal (as it isn't here, redirected to a log file). The readiness-polling loop above only works if the benchmark scripts are invoked with `python3 -u` (unbuffered) — without it, "Listening for work orders" doesn't actually appear in the log file until the process exits, making every readiness check time out uselessly (the trial still completes correctly underneath, just ~60s slower per trial for no reason).
 
-All three configurations land in the same 1.3–1.5s/batch range, because the identical NumPy FFT dominates the time regardless of what schedules it. This is itself the key finding: **for a workload this small and this synchronous (one batch in flight at a time), neither Dask nor Spark buys a speed-up over just running the function locally** — the network/serialization cost of shipping a batch to a remote worker roughly cancels out any parallelism benefit.
+Each benchmark script gained a `--trial N` argument and writes to `results/overhead/<engine>_trialN.csv` with a `trial` column. `code/summarize_overhead.py` reads all 15 files and rolls them up.
 
-Where the three differ is overhead and character, not raw throughput:
+**Results (mean ± stdev across 5 trials):**
 
-- **Baseline** has the lowest timing variance and no cluster machinery to set up, but ties up the master node's own CPU/network for every batch and doesn't scale if batches arrive faster than one at a time.
-- **Dask** is lightest on CPU/memory (pure Python, low overhead) and about as fast as the baseline, but shows more timing variance.
-- **Spark** is the slowest to cold-start (JVM warm-up) and heaviest on CPU/memory of the three, and also the most variable — the extra hop through a second machine (task goes to whichever of worker1/worker2 Spark schedules it to) adds a small, variable network cost on top of the identical FFT.
+| Metric | Baseline | Dask | Spark |
+| --- | --- | --- | --- |
+| Cold start (s) | 1.98 ± 0.70 | 1.68 ± 0.20 | 3.24 ± 0.39 |
+| Warm avg / batch (s) | 1.35 ± 0.09 | 1.45 ± 0.06 | 1.54 ± 0.05 |
+| Timing stdev (within a trial) | 0.19 ± 0.10 | 0.18 ± 0.05 | 0.33 ± 0.08 |
+| Avg CPU | ~52% | ~52% | ~58% |
+| Avg memory | ~59% | ~57% | ~68% |
 
-There is no single "winner" for this workload — the benchmark shows that the choice of engine matters more for *how you scale* (many concurrent batches, fault tolerance, mixed workloads) than for raw per-batch latency at this batch size.
+**The fragile claim, re-tested:** every one of Spark's 5 trials (0.283, 0.311, 0.360, 0.237, 0.458) has a higher within-trial stdev than every one of baseline's or Dask's trials. The original finding — Spark is less stable batch-to-batch — turned out to be *true*, it just wasn't properly supported by a single run. Repetition is what turned a fragile-looking result into a real one. Spark's slow cold start (JVM warm-up) is similarly consistent across all 5 trials.
+
+What this benchmark still cannot tell us: whether any of this matters when more than one batch is queued up at a time. That needs a different test.
+
+---
+
+## Step 10: Benchmark B — Throughput Under Concurrent Load
+
+**Why this benchmark exists:** Benchmark A is deliberately synchronous, so Dask and Spark never get to schedule more than one task at once — the one thing a distributed engine is actually for. This benchmark removes that constraint: fire batches at each configuration faster than it can keep up, and see what happens to throughput and latency once a backlog forms.
+
+**Load generation:** only 31 real S3 file pairs exist. `code/load_producer.py` cycles through them with fresh `batch_id`s to generate as many batches as needed — still real physics data reprocessed, no synthetic data required. It fires batches with no delay (or an optional rate cap).
+
+**Four configurations, one question each:**
+- `code/load_baseline_sequential.py` — no engine, strictly one batch at a time (the natural ceiling with zero concurrency)
+- `code/load_baseline_concurrent.py` — no engine, but a `ThreadPoolExecutor` (8 threads) on the single master node — isolates whether the fix is *any* concurrency, or specifically needs a multi-machine cluster
+- `code/load_dask.py` — 3-node cluster, non-blocking `client.submit` per batch as it arrives (this mirrors how the live `processor.py` actually works, unlike Benchmark A's blocking version)
+- `code/load_spark.py` — 3-node cluster; since a single `sc.parallelize(...).collect()` call is itself blocking, concurrent submission is achieved with multiple driver threads each making their own `collect()` call against the same shared `SparkContext` (a supported pattern — Spark schedules jobs from multiple threads onto the cluster's executors)
+
+Each script logs `send_time` (when `load_producer.py` sent it), `start_time`/`end_time` (when this configuration actually processed it) per batch to `results/load/<config>.csv`. `code/run_load.sh <config> <n_batches>` drives one configuration end to end (same readiness-polling pattern as Step 9); `code/analyze_load.py` computes throughput and p50/p95/p99 latency across all four.
+
+**Results (100 batches, uncapped arrival):**
+
+| Config | Throughput (batches/s) | p50 latency | p95 latency | p99 latency |
+| --- | --- | --- | --- | --- |
+| Baseline (sequential) | 0.80 | 64.2s | 119.4s | 124.2s |
+| Baseline (concurrent) | 1.13 | 50.5s | 84.5s | 87.5s |
+| Dask | 1.20 | 43.5s | 79.8s | 82.8s |
+| Spark | 1.21 | 44.8s | 80.2s | 82.4s |
+
+**Interpretation:** this is the regime Benchmark A structurally couldn't speak to, and here distribution clearly earns its keep — both Dask and Spark cut p50 latency by roughly 30% and lift sustained throughput by roughly 50% over sequential baseline. But the more interesting result is *where the gain comes from*: switching from sequential to merely concurrent (8 threads, still one machine, no cluster) already gets from 0.80 to 1.13 batches/s — most of the total improvement. Going from "concurrent on one box" to "an actual 3-node cluster" adds a further, real but modest gain (1.13 → 1.20–1.21). Dask and Spark are statistically indistinguishable from each other under load.
+
+## Combined Conclusion
+
+Two honestly-scoped benchmarks, two different (and both true) findings:
+
+- **In isolation, one batch at a time (Benchmark A):** engine choice barely matters for speed, and Spark's overhead (slow JVM cold start, more per-batch jitter) is a real, repeatable cost with no offsetting benefit at this scale.
+- **Under a real backlog (Benchmark B):** distribution helps — but a large share of that benefit is simply "don't process things one at a time," which ordinary concurrency on a single machine already gets you most of the way to, before a multi-machine cluster is ever needed.
+
+The right takeaway isn't "distributed computing doesn't matter" (Benchmark A alone would have wrongly suggested that) or "distributed computing obviously wins" (an unfairly-designed load test could have oversold that) — it's that the two questions are genuinely different, and a benchmark answers exactly the question it was built to ask.
+
+---
+
+## Presentation
+
+The full project — including both benchmarks and their real numbers — is told in `quax_story-2.html`, a self-contained interactive slide deck. Open it in any web browser.
+
+## Tests
+
+The `tests/` directory contains helper scripts used during development:
+- `cluster_check.py` — verifies the Dask cluster is reachable
+- `explore_s3.py` — lists/inspects objects in the S3 bucket
+- `test_keys.py` — checks that S3 credentials are correctly loaded

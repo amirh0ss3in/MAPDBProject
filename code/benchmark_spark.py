@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import time
+import argparse
 import urllib3
 import psutil
 import numpy as np
@@ -16,10 +17,15 @@ S3_SECRET = os.environ.get('S3_SECRET_KEY')
 if not S3_ACCESS or not S3_SECRET:
     raise ValueError("ERROR: S3 keys not found in environment variables!")
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--trial", type=int, default=1, help="trial number, for repeated-trial statistics")
+args = parser.parse_args()
+
 # How many batches to process before stopping the benchmark
 N_BATCHES = 20
-# Where to save the benchmark results
-RESULTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "benchmark_spark_results.csv")
+# Where to save the benchmark results (one file per trial, in results/overhead/)
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "overhead")
+RESULTS_FILE = os.path.join(RESULTS_DIR, f"spark_trial{args.trial}.csv")
 
 
 def process_physics_data(work_order):
@@ -131,6 +137,7 @@ if __name__ == "__main__":
                     # save one row of benchmark data for this batch
                     results.append({
                         "engine": "spark",
+                        "trial": args.trial,
                         "batch_id": work_order['batch_id'],
                         "order": processed,
                         "calc_time": round(calc_time, 3),
@@ -150,14 +157,16 @@ if __name__ == "__main__":
     total_time = time.time() - benchmark_start
 
     # write all results to a CSV file
+    os.makedirs(RESULTS_DIR, exist_ok=True)
     with open(RESULTS_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["engine", "batch_id", "order",
+        writer = csv.DictWriter(f, fieldnames=["engine", "trial", "batch_id", "order",
                                                "calc_time", "cpu_percent", "mem_percent"])
         writer.writeheader()
         writer.writerows(results)
 
     print("\n========== BENCHMARK DONE ==========")
     print(f"Engine:          Spark")
+    print(f"Trial:           {args.trial}")
     print(f"Batches:         {len(results)}")
     print(f"Total time:      {total_time:.2f}s")
     if results:

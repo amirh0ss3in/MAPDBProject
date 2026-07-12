@@ -4,7 +4,7 @@
 
 This project implements a streaming data pipeline for the QUAX experiment. It fetches high-frequency IQ radio data from a CloudVeneto S3 bucket, computes the Fast Fourier Transform (FFT) of each batch, and visualizes the resulting power spectrum in real-time.
 
-The processing step is implemented on **two independent engines — Dask and Apache Spark** — which are then compared head-to-head in a dedicated benchmark.
+The processing step is implemented on **two independent distributed engines — Dask and Apache Spark** — which are compared head-to-head, and against a **single-process baseline with no distribution engine at all**, in a dedicated benchmark.
 
 ## Architecture
 
@@ -24,6 +24,8 @@ The pipeline was developed and run on CloudVeneto Virtual Machines (Ubuntu 24.04
 - 2 Worker Nodes
 
 The Dask processor connects to the two worker nodes over SSH (`SSHCluster`), so the Dask runs used all three machines. Passwordless SSH was configured between the master and the workers.
+
+For the benchmark, Spark is run the same way: as a Spark Standalone cluster with the master daemon on `master` and worker daemons on `worker1` and `worker2` (`spark://master:7077`), so both engines use all three machines symmetrically.
 
 ## Prerequisites
 
@@ -69,29 +71,59 @@ A second implementation of the processor was built on Apache Spark (`code/proces
 
 **Design decision:** each batch is handled as a single Spark task, and the FFT runs once with NumPy inside that task, mirroring what the Dask version does. Spark is deliberately *not* used to split a single FFT across cores, because that would compare the *algorithm* instead of the *engine* and make the benchmark misleading.
 
-## Benchmark: Spark vs Dask
+### Running Spark as a 3-node cluster (for the benchmark)
 
-Both engines were benchmarked on 20 identical batches of real QUAX data, run synchronously (submit one batch, wait for its result, record the time). For every batch the processing time, CPU %, and memory % were logged with `psutil`.
+`processor_spark.py` (the live pipeline) uses Spark's default local mode, since the live demo only needs one machine. The benchmark, however, connects to a real Spark Standalone cluster spanning all three nodes. Java 17 and `pyspark` (matching version) must be installed on all three nodes, then:
+
+```bash
+# On master — start the Spark master daemon
+source ~/pyvenv/bin/activate
+SPARK_HOME=$(python -c "import pyspark,os; print(os.path.dirname(pyspark.__file__))")
+$SPARK_HOME/bin/spark-class org.apache.spark.deploy.master.Master --host master --port 7077 --webui-port 8080 &
+
+# On worker1 and worker2 — start a Spark worker daemon pointing at the master
+source ~/pyvenv/bin/activate
+SPARK_HOME=$(python -c "import pyspark,os; print(os.path.dirname(pyspark.__file__))")
+export PYSPARK_PYTHON=~/pyvenv/bin/python
+$SPARK_HOME/bin/spark-class org.apache.spark.deploy.worker.Worker spark://master:7077 --webui-port 8081 &
+```
+
+`benchmark_spark.py` then connects with `.master("spark://master:7077")` instead of the default local mode.
+
+## Benchmark: Baseline vs Dask vs Spark
+
+Three configurations were benchmarked on 20 identical batches of real QUAX data, run synchronously (submit one batch, wait for its result, record the time). For every batch the processing time, CPU %, and memory % were logged with `psutil`:
+
+- **Baseline** — no distribution engine at all; `process_physics_data` is called directly, in-process, on the master node. This is the reference point that Dask and Spark are measured against.
+- **Dask** — the 3-node `SSHCluster` (`master` + `worker1` + `worker2`).
+- **Spark** — a 3-node Spark Standalone cluster (`master` + `worker1` + `worker2`), so it is now run on the *same* infrastructure as Dask (see note below).
 
 **Files:**
-- `code/benchmark_spark.py` — instrumented Spark processor
+- `code/benchmark_baseline.py` — instrumented, undistributed processor
 - `code/benchmark_dask.py` — instrumented Dask processor
-- `code/benchmark_spark_results.csv` — raw Spark results
-- `code/benchmark_dask_results.csv` — raw Dask results
+- `code/benchmark_spark.py` — instrumented Spark processor
+- `code/benchmark_baseline_results.csv` / `benchmark_dask_results.csv` / `benchmark_spark_results.csv` — raw results
+- `code/summarize_benchmarks.py` — recomputes the table below from the raw CSVs
 
 **Results (warm state, i.e. after the first batch):**
 
-| Metric            | Spark      | Dask       |
-| ----------------- | ---------- | ---------- |
-| Cold start        | 3.58 s     | 2.40 s     |
-| Warm avg / batch  | 1.42 s     | 1.44 s     |
-| Timing stability  | stdev 0.08 | stdev 0.25 |
-| Avg CPU           | ~26%       | ~2%        |
-| Avg memory        | ~61%       | ~50%       |
+| Metric            | Baseline | Dask   | Spark  |
+| ----------------- | -------- | ------ | ------ |
+| Cold start        | 2.54 s   | 2.64 s | 4.35 s |
+| Warm avg / batch   | 1.39 s   | 1.32 s | 1.54 s |
+| Timing stdev       | 0.11     | 0.19   | 0.29   |
+| Avg CPU            | ~23%     | ~2%    | ~8%    |
+| Avg memory         | ~59%     | ~60%   | ~68%   |
 
-**Interpretation:** Steady-state speed is essentially tied, because the NumPy FFT inside each task is identical. The engines differ in *character*: Spark gives more stable, predictable per-batch latency but is heavier on CPU and memory and slower to start (JVM warm-up); Dask is lightweight and starts faster (pure Python) but shows more timing variance. There is no single "winner" — it is a trade-off depending on what you optimize for.
+**Interpretation:** All three are close in steady-state speed (1.3–1.5 s/batch), because the NumPy FFT inside each task is identical and dominates the time — network/scheduling overhead is a small fraction of it. This is itself the key finding: for a workload this small, **neither distribution engine buys a speed-up over doing the work in-process**; the network/serialization cost of shipping a batch to a remote worker roughly cancels out any parallelism benefit, since only one batch is ever in flight at a time in this synchronous benchmark. Where the engines *do* differ is overhead and character:
 
-**Note on configuration.** The two engines were not run on the same number of machines: the Dask benchmark used the 3-node `SSHCluster`, while the Spark benchmark was run in `local[*]` mode on the master node only. The speed comparison should be read with this caveat in mind. However, the Dask results themselves show that node count had little effect on this workload: because each batch is a small FFT, spreading it across machines gave no speed-up (the network overhead of distribution outweighs the compute gain). The resource-usage and stability differences reflect intrinsic engine characteristics (JVM vs. pure Python) and are independent of the number of nodes.
+- **Baseline** has the lowest timing variance of the three and no cluster machinery to set up, but ties up the master node's own CPU/network for every batch and doesn't scale if batches arrive faster than one at a time.
+- **Dask** is lightest on CPU/memory (pure Python, lower overhead) and about as fast as the baseline, but shows more timing variance.
+- **Spark** is the slowest to cold-start (JVM warm-up) and heaviest on CPU/memory of the three, and also the most variable here — the extra hop through a second machine (task goes to whichever of worker1/worker2 Spark schedules it to) adds a small, variable network cost on top of the identical FFT.
+
+There is no single "winner" for this workload — the benchmark shows that the choice of engine matters more for *how you scale* (many concurrent batches, fault tolerance, mixed workloads) than for raw per-batch latency at this batch size.
+
+**Note on configuration.** Earlier runs of this benchmark had a known asymmetry: Spark ran in `local[*]` mode on the master only, while Dask used the 3-node `SSHCluster`. This has since been fixed — a real Spark Standalone cluster now runs across all three nodes (master + worker1 + worker2), matching Dask's configuration, and a baseline (no engine) run was added for reference. The numbers above are from this corrected, symmetric setup.
 
 ## Presentation
 

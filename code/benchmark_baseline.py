@@ -4,9 +4,9 @@ import json
 import time
 import urllib3
 import psutil
+import boto3
 import numpy as np
 from kafka import KafkaConsumer, KafkaProducer
-from pyspark.sql import SparkSession
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -19,23 +19,19 @@ if not S3_ACCESS or not S3_SECRET:
 # How many batches to process before stopping the benchmark
 N_BATCHES = 20
 # Where to save the benchmark results
-RESULTS_FILE = "benchmark_spark_results.csv"
+RESULTS_FILE = "benchmark_baseline_results.csv"
 
 
+# =================================================================
+# NO ENGINE AT ALL - runs in-process on the master node.
+# Byte-for-byte the same physics as the Dask/Spark worker functions,
+# so this measures the engines' overhead, not a different algorithm.
+# =================================================================
 def process_physics_data(work_order):
-    import os
-    import boto3
-    import numpy as np
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-    access_key = os.environ.get('S3_ACCESS_KEY')
-    secret_key = os.environ.get('S3_SECRET_KEY')
-
     s3 = boto3.client('s3',
         endpoint_url='https://cloud-areapd.pd.infn.it:5210',
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
+        aws_access_key_id=S3_ACCESS,
+        aws_secret_access_key=S3_SECRET,
         verify=False
     )
 
@@ -65,21 +61,7 @@ def process_physics_data(work_order):
 
 
 if __name__ == "__main__":
-    print("Starting Spark Session (BENCHMARK mode, 3-node Standalone cluster)...")
-
-    # Connect to the Spark Standalone cluster (master + worker1 + worker2),
-    # matching the Dask benchmark's 3-node SSHCluster for a fair comparison.
-    spark = SparkSession.builder \
-        .appName("QUAX-Spark-Benchmark") \
-        .master("spark://master:7077") \
-        .config("spark.executorEnv.S3_ACCESS_KEY", S3_ACCESS) \
-        .config("spark.executorEnv.S3_SECRET_KEY", S3_SECRET) \
-        .config("spark.executorEnv.PYTHONPATH", os.environ.get("PYTHONPATH", "")) \
-        .config("spark.pyspark.python", "/home/ubuntu/pyvenv/bin/python") \
-        .config("spark.pyspark.driver.python", "/home/ubuntu/pyvenv/bin/python") \
-        .getOrCreate()
-    sc = spark.sparkContext
-    print(f"Spark session ready! Executors: {len(sc._jsc.sc().statusTracker().getExecutorInfos()) - 1}")
+    print("Starting Baseline benchmark (BENCHMARK mode, no distribution engine)...")
 
     consumer = KafkaConsumer(
         'quax_raw',
@@ -93,7 +75,6 @@ if __name__ == "__main__":
         value_serializer=lambda x: json.dumps(x).encode('utf-8')
     )
 
-    # Prepare the results file with a header row
     results = []
     print(f"Benchmark will stop after {N_BATCHES} batches.")
     print("Listening for work orders... (Run producer.py!)")
@@ -116,8 +97,7 @@ if __name__ == "__main__":
                     mem_before = psutil.virtual_memory().percent
 
                     start = time.time()
-                    rdd = sc.parallelize([work_order], numSlices=1)
-                    result_json = rdd.map(process_physics_data).collect()[0]
+                    result_json = process_physics_data(work_order)
                     calc_time = time.time() - start
 
                     # --- read resource usage AFTER processing ---
@@ -128,9 +108,8 @@ if __name__ == "__main__":
                     producer.send('quax_processed', value=result_json)
                     producer.flush()
 
-                    # save one row of benchmark data for this batch
                     results.append({
-                        "engine": "spark",
+                        "engine": "baseline",
                         "batch_id": work_order['batch_id'],
                         "order": processed,
                         "calc_time": round(calc_time, 3),
@@ -149,7 +128,6 @@ if __name__ == "__main__":
 
     total_time = time.time() - benchmark_start
 
-    # write all results to a CSV file
     with open(RESULTS_FILE, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["engine", "batch_id", "order",
                                                "calc_time", "cpu_percent", "mem_percent"])
@@ -157,7 +135,7 @@ if __name__ == "__main__":
         writer.writerows(results)
 
     print("\n========== BENCHMARK DONE ==========")
-    print(f"Engine:          Spark")
+    print(f"Engine:          Baseline (no distribution)")
     print(f"Batches:         {len(results)}")
     print(f"Total time:      {total_time:.2f}s")
     if results:
@@ -167,5 +145,3 @@ if __name__ == "__main__":
             warm = times[1:]
             print(f"Avg after first: {sum(warm)/len(warm):.2f}s")
     print(f"Results saved to: {RESULTS_FILE}")
-
-    spark.stop()

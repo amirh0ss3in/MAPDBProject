@@ -101,18 +101,40 @@ There is no single "winner" — it is a trade-off. Spark suits workloads that va
 
 ---
 
-## Step 4: Note on Cluster Configuration (Honest Limitation)
+## Step 4: Note on Cluster Configuration (Historical — now fixed, see Step 6)
 
-The two engines were **not** run on the same number of machines: the Dask benchmark used the 3-node `SSHCluster`, while the Spark benchmark was run in `local[*]` mode on the master node only.
+The two engines were originally **not** run on the same number of machines: the Dask benchmark used the 3-node `SSHCluster`, while the Spark benchmark was run in `local[*]` mode on the master node only, because at the time the two worker VMs were powered off and unreachable (`ping` → Destination Host Unreachable), so a Spark Standalone cluster across all three nodes could not be brought up.
 
-> **Why does this not invalidate the results?** Because the Dask data itself shows that node count barely affected this workload. Each batch is a small FFT — small enough that spreading it across three machines gave no speed-up over one, since the network cost of distribution outweighs the compute gain. (This is itself a meaningful finding: for small per-batch tasks, more machines don't help.)
-
-So the **speed** comparison is presented with this caveat. The **resource-usage** and **stability** findings, however, come from the intrinsic nature of each engine (JVM vs. pure Python) and are independent of the number of nodes.
-
-*Attempting a fully symmetric 3-node Spark run was blocked by infrastructure: at the time of writing, the two worker VMs were powered off and unreachable (`ping` → Destination Host Unreachable), so a Spark Standalone cluster across all three nodes could not be brought up.*
+That asymmetry has since been resolved — see Step 6 for the fix and the corrected, symmetric results.
 
 ---
 
 ## Step 5: Presentation
+
+The full project, including this Spark work and the benchmark charts, is summarized in `quax_presentation.html` — a self-contained visual presentation that opens in any web browser.
+
+---
+
+## Step 6: Fixing the 3-Node Symmetry and Adding a Baseline
+
+> **Why?** Step 4 left an open caveat: Spark was only ever benchmarked in local mode, so the Spark-vs-Dask comparison wasn't apples-to-apples, and there was no reference point for "how much does either engine help vs. not distributing at all?"
+
+Once worker1 and worker2 were back online, both gaps were closed:
+
+**1. Real 3-node Spark cluster.** Java 17 and `pyspark==4.1.2` (matching the master's version) were installed on `worker1` and `worker2` via `uv pip install pyspark==4.1.2` inside their existing `~/pyvenv` — consistent with how every other Python dependency in this project was installed. A Spark Standalone cluster was then started: the master daemon on `master` (`spark://master:7077`), and worker daemons on `worker1`/`worker2` registering against it (see the "Running Spark as a 3-node cluster" section in `README.md` for the exact commands). `benchmark_spark.py` was updated to connect via `.master("spark://master:7077")` instead of the implicit local default, with `PYSPARK_PYTHON` pinned to the shared venv so executors have the same NumPy/boto3 environment as the driver.
+
+**2. Baseline (no engine).** A new `code/benchmark_baseline.py` calls `process_physics_data` directly, in-process, with no Dask or Spark involved at all. It's byte-for-byte the same physics function as the other two, so it isolates the engines' overhead rather than measuring a different algorithm.
+
+All three benchmarks were re-run fresh, back-to-back, on the same 20 batches of real QUAX data:
+
+| Metric            | Baseline | Dask   | Spark  |
+| ----------------- | -------- | ------ | ------ |
+| Cold start        | 2.54 s   | 2.64 s | 4.35 s |
+| Warm avg / batch  | 1.39 s   | 1.32 s | 1.54 s |
+| Timing stdev      | 0.11     | 0.19   | 0.29   |
+| Avg CPU           | ~23%     | ~2%    | ~8%    |
+| Avg memory        | ~59%     | ~60%   | ~68%   |
+
+**Updated interpretation:** With Spark now genuinely spanning all three nodes, the picture is clearer than before. All three configurations land in the same 1.3–1.5 s/batch range, because the identical NumPy FFT dominates the time regardless of what schedules it. The baseline confirms directly what the original Dask-only evidence only implied: **for a workload this small and this synchronous (one batch in flight at a time), neither Dask nor Spark buys a speed-up over just running the function locally.** Spark remains the heaviest and most variable of the three (JVM overhead plus the extra network hop to whichever worker it schedules onto); Dask remains the lightest on resources. The value of either distributed engine here is architectural (concurrency, fault tolerance, scaling to many simultaneous batches) rather than raw per-batch latency.
 
 The full project, including this Spark work and the benchmark charts, is summarized in `quax_presentation.html` — a self-contained visual presentation that opens in any web browser.

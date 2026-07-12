@@ -1,0 +1,971 @@
+<title>QUAX — A Distributed Real-Time Pipeline</title>
+<style>
+  /* ============ tokens — committed dark: a control-room projection deck ============ */
+  :root {
+    --bg:        #0b0f16;
+    --panel:     #121826;
+    --panel-2:   #151d2e;
+    --code-bg:   #0e1420;
+    --ink:       #e9edf5;
+    --ink-2:     #9aa6bc;
+    --muted:     #64708a;
+    --accent:    #e2a145;
+    --hairline:  rgba(233,237,245,0.09);
+    --grid:      rgba(233,237,245,0.065);
+    --c-seq:     #4a90e8;   /* baseline sequential */
+    --c-conc:    #1fa878;   /* baseline concurrent */
+    --c-dask:    #c98500;   /* dask */
+    --c-spark:   #d95d8d;   /* spark */
+    --serif: 'Charter','Bitstream Charter','Sitka Text',Cambria,Georgia,serif;
+    --mono:  'Cascadia Mono','Cascadia Code',Consolas,'SF Mono','Roboto Mono',monospace;
+    --sans:  'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif;
+    color-scheme: dark;
+  }
+  html, body { margin:0; padding:0; background:var(--bg); }
+  body { font-family:var(--sans); color:var(--ink); overflow:hidden; }
+
+  .deck { position:fixed; inset:0; background:var(--bg); }
+
+  /* ============ slides ============ */
+  .slide {
+    position:absolute; inset:0 0 64px 0;
+    opacity:0; visibility:hidden; transform:translateY(16px);
+    transition:opacity .5s ease, transform .5s ease, visibility 0s linear .5s;
+  }
+  .slide.on {
+    opacity:1; visibility:visible; transform:none;
+    transition:opacity .5s ease, transform .5s ease, visibility 0s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .slide, .slide.on { transition:none; transform:none; }
+  }
+  .slide-inner {
+    height:100%; box-sizing:border-box; overflow-y:auto; overflow-x:hidden;
+    max-width:1140px; margin:0 auto;
+    padding:clamp(28px,5vh,56px) clamp(20px,4.5vw,64px) 32px;
+    display:flex; flex-direction:column; gap:clamp(14px,2.2vh,22px);
+  }
+  /* center when there is room; top-align + scroll when content overflows */
+  .slide-inner > :first-child { margin-top:auto; }
+  .slide-inner > :last-child { margin-bottom:auto; }
+
+  .eyebrow {
+    font-family:var(--mono); font-size:12px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--muted); margin:0;
+  }
+  .eyebrow b { color:var(--accent); font-weight:600; }
+  h1, h2 { font-family:var(--serif); font-weight:600; line-height:1.12; margin:0; text-wrap:balance; }
+  h1 { font-size:clamp(34px,5.2vw,58px); letter-spacing:-.01em; }
+  h2 { font-size:clamp(26px,3.6vw,42px); letter-spacing:-.008em; }
+  .lede { font-size:clamp(15px,1.5vw,18px); line-height:1.65; color:var(--ink-2); max-width:68ch; margin:0; }
+  .lede strong, p strong { color:var(--ink); font-weight:600; }
+  .kicker {
+    font-family:var(--serif); font-style:italic; font-size:clamp(16px,1.7vw,20px);
+    color:var(--accent); margin:6px 0 0; max-width:60ch; line-height:1.5;
+  }
+
+  /* ============ shared components ============ */
+  .cols { display:grid; gap:clamp(16px,2.5vw,36px); align-items:start; }
+  .cols > * { min-width:0; }
+  .cols.c21 { grid-template-columns:1.15fr .85fr; }
+  .cols.c3  { grid-template-columns:1fr 1fr 1fr; }
+  .cols.c2  { grid-template-columns:1fr 1fr; }
+  @media (max-width:840px){ .cols.c21,.cols.c3,.cols.c2 { grid-template-columns:1fr; } }
+
+  .card {
+    background:var(--panel); border:1px solid var(--hairline); border-radius:6px;
+    padding:18px 20px; box-sizing:border-box;
+  }
+  .card h3 { margin:0 0 8px; font-size:15px; font-weight:600; color:var(--ink); font-family:var(--sans); }
+  .card p { margin:0; font-size:13.5px; line-height:1.6; color:var(--ink-2); }
+  .card .tag {
+    display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); margin-bottom:10px;
+  }
+
+  .steps { display:flex; flex-direction:column; gap:0; border:1px solid var(--hairline); border-radius:6px; background:var(--panel); }
+  .step { display:grid; grid-template-columns:170px 1fr; gap:18px; padding:13px 20px; align-items:baseline; }
+  .step + .step { border-top:1px solid var(--hairline); }
+  .step .k { font-family:var(--mono); font-size:12.5px; color:var(--accent); }
+  .step .v { font-size:13.5px; line-height:1.55; color:var(--ink-2); }
+  .step .v strong { color:var(--ink); }
+  @media (max-width:640px){ .step { grid-template-columns:1fr; gap:4px; } }
+
+  code.inl {
+    font-family:var(--mono); font-size:.86em; color:var(--ink);
+    background:var(--code-bg); border:1px solid var(--hairline); border-radius:4px; padding:1px 6px;
+    white-space:nowrap;
+  }
+
+  pre.code {
+    font-family:var(--mono); font-size:clamp(11px,1.05vw,12.5px); line-height:1.7;
+    background:var(--code-bg); border:1px solid var(--hairline); border-radius:6px;
+    padding:18px 22px; margin:0; overflow-x:auto; color:#d5dced;
+  }
+  pre.code .k { color:var(--accent); }
+  pre.code .s { color:#8fc7a6; }
+  pre.code .c { color:#5f6c85; font-style:italic; }
+  pre.code .f { color:#7fb3f0; }
+  pre.code .n { color:#d9a8c4; }
+
+  .stats { display:flex; flex-wrap:wrap; gap:clamp(14px,2.5vw,40px); }
+  .stat .l { font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:4px; display:flex; align-items:center; gap:7px; }
+  .stat .n { font-size:clamp(24px,2.6vw,32px); font-weight:600; color:var(--ink); line-height:1.1; }
+  .stat .n small { font-size:.52em; font-weight:400; color:var(--ink-2); margin-left:2px; }
+  .stat .s { font-size:12px; color:var(--muted); margin-top:3px; }
+
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; flex:none; }
+
+  .chart-panel {
+    background:var(--panel); border:1px solid var(--hairline); border-radius:6px;
+    padding:16px 18px 10px; box-sizing:border-box;
+  }
+  .chart-title { font-family:var(--mono); font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--muted); margin:0 0 4px; }
+  .legend { display:flex; flex-wrap:wrap; gap:16px; margin:2px 0 8px; }
+  .legend span { display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px; color:var(--ink-2); }
+  svg text { font-family:var(--mono); }
+
+  details.tbl { margin-top:6px; }
+  details.tbl summary {
+    cursor:pointer; font-family:var(--mono); font-size:11.5px; color:var(--muted);
+    letter-spacing:.06em; padding:4px 0; list-style-position:outside;
+  }
+  details.tbl summary:hover { color:var(--ink-2); }
+  details.tbl .twrap { overflow-x:auto; }
+  details.tbl table { border-collapse:collapse; font-size:12.5px; margin:8px 0 6px; min-width:420px; }
+  details.tbl th, details.tbl td { text-align:right; padding:5px 14px 5px 0; border-bottom:1px solid var(--hairline); font-family:var(--mono); color:var(--ink-2); font-variant-numeric:tabular-nums; }
+  details.tbl th { color:var(--muted); font-weight:400; font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+  details.tbl td:first-child, details.tbl th:first-child { text-align:left; }
+
+  .foot-note { font-family:var(--mono); font-size:11.5px; color:var(--muted); line-height:1.7; }
+  a { color:var(--accent); text-decoration:none; border-bottom:1px solid rgba(226,161,69,.35); }
+  a:hover { border-bottom-color:var(--accent); }
+
+  /* ============ title slide ============ */
+  .hero-canvas-wrap { background:var(--panel); border:1px solid var(--hairline); border-radius:6px; padding:14px 16px 8px; }
+  #spec { display:block; width:100%; height:220px; }
+  .hero-caption { font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.08em; margin:8px 2px 4px; }
+  .hero-meta { display:flex; flex-wrap:wrap; gap:10px 26px; align-items:center; font-family:var(--mono); font-size:12px; color:var(--muted); }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { font-family:var(--mono); font-size:11px; color:var(--ink-2); border:1px solid var(--hairline); border-radius:99px; padding:3px 11px; letter-spacing:.05em; }
+
+  /* ============ diagram ============ */
+  .diagram-wrap { overflow-x:auto; background:var(--panel); border:1px solid var(--hairline); border-radius:6px; padding:10px; }
+  .diagram-wrap svg { display:block; min-width:820px; width:100%; height:auto; }
+
+  /* ============ ladder (bench B setup) ============ */
+  .rung { display:grid; grid-template-columns:34px 240px 1fr; gap:16px; align-items:baseline; padding:14px 20px; }
+  .rung + .rung { border-top:1px solid var(--hairline); }
+  .rung .num { font-family:var(--mono); font-size:13px; color:var(--muted); }
+  .rung .name { font-size:14.5px; font-weight:600; color:var(--ink); display:flex; align-items:center; gap:9px; }
+  .rung .desc { font-size:13.5px; line-height:1.55; color:var(--ink-2); }
+  .rung .desc em { color:var(--ink); font-style:normal; font-weight:600; }
+  @media (max-width:760px){ .rung { grid-template-columns:30px 1fr; } .rung .desc { grid-column:2; } }
+
+  /* ============ nav footer ============ */
+  .navbar {
+    position:absolute; left:0; right:0; bottom:0; height:64px;
+    border-top:1px solid var(--hairline); background:var(--bg);
+    display:flex; align-items:center; gap:18px; padding:0 clamp(14px,3vw,40px); box-sizing:border-box;
+    z-index:20;
+  }
+  .navbtn {
+    width:38px; height:38px; flex:none; border-radius:6px; cursor:pointer;
+    background:var(--panel); color:var(--ink-2); border:1px solid var(--hairline);
+    font-size:17px; line-height:1; display:grid; place-items:center;
+  }
+  .navbtn:hover { color:var(--ink); border-color:rgba(233,237,245,.25); }
+  .navbtn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .ruler { position:relative; flex:1; height:26px; cursor:pointer; }
+  .ruler .ticks {
+    position:absolute; inset:auto 0 0 0; height:12px;
+    background:
+      repeating-linear-gradient(90deg, var(--hairline) 0 1px, transparent 1px 11px),
+      repeating-linear-gradient(90deg, rgba(233,237,245,.18) 0 1px, transparent 1px 55px);
+    background-size:100% 7px, 100% 12px;
+    background-position:bottom, bottom; background-repeat:no-repeat;
+  }
+  .ruler .marker {
+    position:absolute; bottom:0; width:2px; height:22px; background:var(--accent);
+    box-shadow:0 0 8px rgba(226,161,69,.6); transition:left .35s ease;
+  }
+  @media (prefers-reduced-motion: reduce){ .ruler .marker { transition:none; } }
+  .counter { font-family:var(--mono); font-size:12px; color:var(--muted); letter-spacing:.1em; white-space:nowrap; }
+  .counter b { color:var(--ink); font-weight:600; }
+  .keys { font-family:var(--mono); font-size:11px; color:var(--muted); white-space:nowrap; }
+  @media (max-width:560px){ .keys { display:none; } }
+
+  /* ============ tooltip ============ */
+  #tip {
+    position:fixed; z-index:60; pointer-events:none; opacity:0; transition:opacity .12s;
+    background:#1b2436; border:1px solid rgba(233,237,245,.16); border-radius:6px;
+    padding:8px 12px; font-family:var(--mono); font-size:12px; color:var(--ink);
+    box-shadow:0 6px 24px rgba(0,0,0,.5); max-width:280px; line-height:1.6;
+  }
+  #tip .trow { display:flex; align-items:center; gap:8px; white-space:nowrap; }
+  #tip .trow .dot { width:8px; height:8px; }
+  #tip .thead { color:var(--muted); font-size:11px; margin-bottom:2px; }
+</style>
+
+<div class="deck" id="deck">
+
+  <!-- ============ 1 · TITLE ============ -->
+  <section class="slide" aria-label="Title">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>MAPD-B · Final Project</b> &nbsp;—&nbsp; distributed pipeline + benchmark study</p>
+      <h1>Listening for axions,<br>one batch at a time</h1>
+      <p class="lede">A real-time pipeline for the <strong>QUAX experiment</strong>: radio-frequency physics data
+        streamed from S3 through Kafka to a live spectrum — processed on <strong>Dask</strong>, on
+        <strong>Spark</strong>, and with <strong>no engine at all</strong>. Then two benchmarks to measure
+        what the engine is actually worth.</p>
+      <div class="hero-canvas-wrap">
+        <canvas id="spec" aria-label="Animated averaged power spectrum with a peak, as drawn by the live dashboard"></canvas>
+        <p class="hero-caption">AVERAGED POWER SPECTRUM · 2048 BINS · ONE TRACE PER BATCH — WHAT THE LIVE DASHBOARD DRAWS</p>
+      </div>
+      <div class="hero-meta">
+        <div class="chips">
+          <span class="chip">CloudVeneto</span><span class="chip">Kafka 3.7</span><span class="chip">Dask</span>
+          <span class="chip">Spark 4.1</span><span class="chip">S3</span><span class="chip">Streamlit</span>
+        </div>
+        <span><a href="https://github.com/amirh0ss3in/MAPDBProject" target="_blank" rel="noopener">github.com/amirh0ss3in/MAPDBProject</a></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2 · THE PROBLEM ============ -->
+  <section class="slide" aria-label="The problem">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>01</b> · the problem</p>
+      <h2>A detector that never stops talking</h2>
+      <div class="cols c21">
+        <div>
+          <p class="lede">QUAX — the <strong>QU</strong>est for <strong>AX</strong>ions — hunts dark-matter axions by
+          listening for a faint microwave tone in a resonant cavity. Its readout is a continuous stream of
+          I/Q radio samples. In this project, <strong>31 pairs of ~64&nbsp;MB binary files</strong>
+          (<code class="inl">duck_i_*.dat</code> / <code class="inl">duck_q_*.dat</code>) in a CloudVeneto S3
+          bucket stand in for the live data-acquisition stream.</p>
+          <p class="kicker">Build it three ways — Dask, Spark, no engine — and measure what
+          distribution actually buys.</p>
+        </div>
+        <div class="steps">
+          <div class="step"><span class="k">fetch</span><span class="v">pull each batch of raw I/Q bytes from S3 as it is announced</span></div>
+          <div class="step"><span class="k">transform</span><span class="v">FFT every 2048-sample window → an averaged <strong>power spectrum</strong> (mean + std)</span></div>
+          <div class="step"><span class="k">watch</span><span class="v">plot it on a <strong>live dashboard</strong>, seconds after the batch lands</span></div>
+          <div class="step"><span class="k">measure</span><span class="v">same job on <strong>three backends</strong> — which scheduler earns its keep, and when?</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 · INFRASTRUCTURE ============ -->
+  <section class="slide" aria-label="Infrastructure">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>02</b> · infrastructure</p>
+      <h2>Three small machines behind a gate</h2>
+      <div class="cols c3">
+        <div class="card"><span class="tag">master · 10.67.22.111</span>
+          <p>Ubuntu 24.04 · 2 vCPU · 4 GB. Runs <strong style="color:var(--ink)">Kafka</strong> (+ ZooKeeper), the processor driver, and the Streamlit dashboard — and doubles as a compute node.</p></div>
+        <div class="card"><span class="tag">worker1 · 10.67.22.246</span>
+          <p>Ubuntu 24.04 · 2 vCPU · 4 GB. Pure compute: a Dask worker or a Spark executor, depending on the engine under test.</p></div>
+        <div class="card"><span class="tag">worker2 · 10.67.22.248</span>
+          <p>Ubuntu 24.04 · 2 vCPU · 4 GB. Same role as worker1 — both engines get the identical three machines, symmetrically.</p></div>
+      </div>
+      <div class="steps">
+        <div class="step"><span class="k">ProxyJump</span><span class="v">CloudVeneto VMs live on a private network — one <code class="inl">~/.ssh/config</code> entry tunnels laptop → <code class="inl">gate.cloudveneto.it</code> → VM in a single hop</span></div>
+        <div class="step"><span class="k">/etc/hosts</span><span class="v">all three nodes resolve each other by name — Dask and Spark both need seamless node-to-node chatter</span></div>
+        <div class="step"><span class="k">ssh-keygen</span><span class="v">passwordless SSH from master to workers, so the cluster can spawn remote processes without a human typing passwords</span></div>
+        <div class="step"><span class="k">uv</span><span class="v">one command chain, run on all three nodes → <strong>byte-identical Python environments</strong> (dask, pyspark 4.1.2, numpy, boto3, kafka-python-ng, streamlit) + Java 17 for Spark</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4 · ARCHITECTURE ============ -->
+  <section class="slide" aria-label="Architecture">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>03</b> · architecture</p>
+      <h2>Ship work orders, not data</h2>
+      <div class="diagram-wrap" role="img" aria-label="Pipeline diagram: producer sends JSON work orders to the Kafka topic quax_raw; the processor driver on master submits each batch to a 3-node cluster whose workers fetch bytes from S3 and compute the FFT; results return through the Kafka topic quax_processed to the Streamlit dashboard.">
+        <svg viewBox="0 0 1000 372" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#64708a"/>
+            </marker>
+          </defs>
+          <!-- cluster box -->
+          <rect x="356" y="26" width="268" height="150" rx="6" fill="#151d2e" stroke="rgba(233,237,245,0.09)"/>
+          <text x="372" y="50" font-size="11" fill="#e2a145" letter-spacing="1.5">3-NODE CLUSTER</text>
+          <text x="372" y="66" font-size="10" fill="#64708a">Dask SSHCluster · Spark Standalone</text>
+          <rect x="372" y="80" width="74" height="52" rx="4" fill="#0e1420" stroke="rgba(233,237,245,0.09)"/>
+          <text x="409" y="103" font-size="10.5" fill="#e9edf5" text-anchor="middle">master</text>
+          <text x="409" y="119" font-size="9" fill="#64708a" text-anchor="middle">FFT task</text>
+          <rect x="453" y="80" width="74" height="52" rx="4" fill="#0e1420" stroke="rgba(233,237,245,0.09)"/>
+          <text x="490" y="103" font-size="10.5" fill="#e9edf5" text-anchor="middle">worker1</text>
+          <text x="490" y="119" font-size="9" fill="#64708a" text-anchor="middle">FFT task</text>
+          <rect x="534" y="80" width="74" height="52" rx="4" fill="#0e1420" stroke="rgba(233,237,245,0.09)"/>
+          <text x="571" y="103" font-size="10.5" fill="#e9edf5" text-anchor="middle">worker2</text>
+          <text x="571" y="119" font-size="9" fill="#64708a" text-anchor="middle">FFT task</text>
+          <text x="372" y="160" font-size="9.5" fill="#64708a">S3 keys injected into worker env — never in the task graph</text>
+          <!-- S3 -->
+          <path d="M770 44 a55 12 0 0 1 110 0 v70 a55 12 0 0 1 -110 0 z" fill="#151d2e" stroke="rgba(233,237,245,0.09)"/>
+          <ellipse cx="825" cy="44" rx="55" ry="12" fill="#1b2436" stroke="rgba(233,237,245,0.09)"/>
+          <text x="825" y="80" font-size="10.5" fill="#e9edf5" text-anchor="middle">CloudVeneto S3</text>
+          <text x="825" y="96" font-size="9" fill="#64708a" text-anchor="middle">bucket quax · 31 I/Q pairs</text>
+          <!-- S3 -> cluster -->
+          <line x1="768" y1="101" x2="632" y2="101" stroke="#64708a" stroke-width="1.4" marker-end="url(#arr)"/>
+          <text x="700" y="118" font-size="9.5" fill="#64708a" text-anchor="middle">boto3 get_object</text>
+          <!-- driver <-> cluster -->
+          <line x1="470" y1="240" x2="470" y2="182" stroke="#64708a" stroke-width="1.4" marker-end="url(#arr)"/>
+          <line x1="510" y1="182" x2="510" y2="240" stroke="#64708a" stroke-width="1.4" marker-end="url(#arr)"/>
+          <text x="463" y="215" font-size="9.5" fill="#64708a" text-anchor="end">submit batch</text>
+          <text x="518" y="215" font-size="9.5" fill="#64708a">spectrum</text>
+          <!-- main row -->
+          <rect x="14" y="244" width="128" height="62" rx="6" fill="#121826" stroke="rgba(233,237,245,0.09)"/>
+          <text x="78" y="271" font-size="11.5" fill="#e9edf5" text-anchor="middle">producer.py</text>
+          <text x="78" y="288" font-size="9" fill="#64708a" text-anchor="middle">emulates the DAQ</text>
+          <rect x="196" y="252" width="150" height="46" rx="23" fill="#0e1420" stroke="rgba(226,161,69,0.35)"/>
+          <text x="271" y="272" font-size="10.5" fill="#e2a145" text-anchor="middle">quax_raw</text>
+          <text x="271" y="287" font-size="9" fill="#64708a" text-anchor="middle">Kafka topic</text>
+          <rect x="400" y="240" width="180" height="70" rx="6" fill="#121826" stroke="rgba(233,237,245,0.09)"/>
+          <text x="490" y="263" font-size="11.5" fill="#e9edf5" text-anchor="middle">processor.py</text>
+          <text x="490" y="279" font-size="10" fill="#9aa6bc" text-anchor="middle">/ processor_spark.py</text>
+          <text x="490" y="296" font-size="9" fill="#64708a" text-anchor="middle">driver on master</text>
+          <rect x="634" y="252" width="168" height="46" rx="23" fill="#0e1420" stroke="rgba(226,161,69,0.35)"/>
+          <text x="718" y="272" font-size="10.5" fill="#e2a145" text-anchor="middle">quax_processed</text>
+          <text x="718" y="287" font-size="9" fill="#64708a" text-anchor="middle">Kafka topic</text>
+          <rect x="856" y="244" width="130" height="62" rx="6" fill="#121826" stroke="rgba(233,237,245,0.09)"/>
+          <text x="921" y="271" font-size="11.5" fill="#e9edf5" text-anchor="middle">dashboard.py</text>
+          <text x="921" y="288" font-size="9" fill="#64708a" text-anchor="middle">Streamlit · :8501</text>
+          <!-- main row arrows -->
+          <line x1="144" y1="275" x2="192" y2="275" stroke="#64708a" stroke-width="1.4" marker-end="url(#arr)"/>
+          <line x1="348" y1="275" x2="396" y2="275" stroke="#64708a" stroke-width="1.4" marker-end="url(#arr)"/>
+          <line x1="582" y1="275" x2="630" y2="275" stroke="#64708a" stroke-width="1.4" marker-end="url(#arr)"/>
+          <line x1="804" y1="275" x2="852" y2="275" stroke="#64708a" stroke-width="1.4" marker-end="url(#arr)"/>
+          <text x="168" y="330" font-size="9.5" fill="#64708a">JSON work order — {batch_id, i_file, q_file} · a few hundred bytes, never 64 MB</text>
+        </svg>
+      </div>
+      <div class="cols c3">
+        <div class="card"><span class="tag">heavy bytes skip the queue</span>
+          <p>The producer announces <strong style="color:var(--ink)">filenames, not payloads</strong>. Workers pull the 64&nbsp;MB directly from S3 — Kafka never becomes a network bottleneck.</p></div>
+        <div class="card"><span class="tag">Kafka decouples the rates</span>
+          <p>If data arrives faster than compute drains it, nothing crashes — the backlog simply waits in <code class="inl">quax_raw</code>. That buffer is what Benchmark&nbsp;B later leans on.</p></div>
+        <div class="card"><span class="tag">results are just messages</span>
+          <p>Every processed spectrum lands in <code class="inl">quax_processed</code>; the dashboard is one more consumer, redrawing its plot per batch over an SSH port-forward.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5 · THE KERNEL ============ -->
+  <section class="slide" aria-label="The physics kernel">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>04</b> · the physics kernel</p>
+      <h2>One function, byte-for-byte, everywhere</h2>
+      <div class="cols c21">
+        <pre class="code"><span class="c"># abridged — identical in all 7 scripts</span>
+<span class="k">def</span> <span class="f">process_physics_data</span>(work_order):
+    s3 = boto3.<span class="f">client</span>(<span class="s">"s3"</span>, endpoint_url=S3_URL, ...)
+
+    obj_i  = s3.<span class="f">get_object</span>(Bucket=<span class="s">"quax"</span>, Key=work_order[<span class="s">"i_file"</span>])
+    obj_q  = s3.<span class="f">get_object</span>(Bucket=<span class="s">"quax"</span>, Key=work_order[<span class="s">"q_file"</span>])
+    data_i = np.<span class="f">frombuffer</span>(obj_i[<span class="s">"Body"</span>].<span class="f">read</span>(), dtype=<span class="s">"&lt;f4"</span>)
+    data_q = np.<span class="f">frombuffer</span>(obj_q[<span class="s">"Body"</span>].<span class="f">read</span>(), dtype=<span class="s">"&lt;f4"</span>)
+
+    signal  = data_i + <span class="n">1j</span> * data_q        <span class="c"># complex IQ stream</span>
+    windows = signal.<span class="f">reshape</span>(-<span class="n">1</span>, <span class="n">2048</span>)     <span class="c"># rows of 2048 samples</span>
+
+    spectra = np.fft.<span class="f">fftshift</span>(np.fft.<span class="f">fft</span>(windows, axis=<span class="n">1</span>), axes=<span class="n">1</span>)
+    power   = np.<span class="f">abs</span>(spectra) ** <span class="n">2</span>
+
+    <span class="k">return</span> {<span class="s">"batch_id"</span>: work_order[<span class="s">"batch_id"</span>],
+            <span class="s">"average"</span>: power.<span class="f">mean</span>(axis=<span class="n">0</span>),  <span class="c"># the dashboard plots this</span>
+            <span class="s">"std"</span>:     power.<span class="f">std</span>(axis=<span class="n">0</span>)}</pre>
+        <div class="steps">
+          <div class="step"><span class="k">I + jQ</span><span class="v">two float32 files become one complex signal, windowed into rows of <strong>2048 samples</strong></span></div>
+          <div class="step"><span class="k">FFT → power</span><span class="v">one shifted FFT per window; mean and std across windows give the averaged spectrum</span></div>
+          <div class="step"><span class="k">1 batch = 1 task</span><span class="v">the FFT is <strong>deliberately not split</strong> across the cluster — each batch is a single task computed in one NumPy shot</span></div>
+          <div class="step"><span class="k">why it matters</span><span class="v">every engine schedules the <strong>same unit of work</strong> — so the benchmarks compare <strong>engines, not algorithms</strong></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6 · THREE ENGINES ============ -->
+  <section class="slide" aria-label="Three engines">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>05</b> · engines</p>
+      <h2>Same kernel, three schedulers</h2>
+      <div class="cols c3">
+        <div class="card">
+          <span class="tag" style="color:var(--c-seq)">baseline · no engine</span>
+          <pre class="code" style="font-size:11.5px; padding:12px 14px; margin-bottom:12px;">result = <span class="f">process_physics_data</span>(work_order)</pre>
+          <p>A plain function call, in-process on the master node. No cluster, no scheduler, no serialization — <strong style="color:var(--ink)">the control group</strong> every engine has to beat.</p>
+        </div>
+        <div class="card">
+          <span class="tag" style="color:var(--c-dask)">dask · 3-node SSHCluster</span>
+          <pre class="code" style="font-size:11.5px; padding:12px 14px; margin-bottom:12px;">cluster = <span class="f">SSHCluster</span>([<span class="s">"master"</span>, <span class="s">"worker1"</span>, <span class="s">"worker2"</span>],
+              worker_options={<span class="s">"env"</span>: s3_keys})
+future = client.<span class="f">submit</span>(process_physics_data, wo)</pre>
+          <p>Master spawns workers over SSH; <code class="inl">client.submit</code> returns a future instantly, so the live processor keeps consuming Kafka while batches compute. S3 keys ride in via worker env.</p>
+        </div>
+        <div class="card">
+          <span class="tag" style="color:var(--c-spark)">spark · 3-node standalone</span>
+          <pre class="code" style="font-size:11.5px; padding:12px 14px; margin-bottom:12px;">spark = (SparkSession.builder
+    .<span class="f">master</span>(<span class="s">"spark://master:7077"</span>) ... )
+result = (sc.<span class="f">parallelize</span>([wo], numSlices=<span class="n">1</span>)
+    .<span class="f">map</span>(process_physics_data).<span class="f">collect</span>()[<span class="n">0</span>])</pre>
+          <p>A Standalone cluster — master daemon + one executor per worker — brought up for each benchmark. Keys via <code class="inl">spark.executorEnv</code>; executor Python pinned to the shared venv.</p>
+        </div>
+      </div>
+      <p class="kicker">Same three machines, same S3 fetch, same FFT. The only variable left is the thing that schedules the work.</p>
+    </div>
+  </section>
+
+  <!-- ============ 7 · TWO QUESTIONS ============ -->
+  <section class="slide" aria-label="Benchmark design">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>06</b> · benchmark design</p>
+      <h2>One number can't answer two questions</h2>
+      <div class="cols c2">
+        <div class="card" style="padding:24px 26px;">
+          <span class="tag">benchmark A — per-task overhead</span>
+          <h3 style="font-size:19px; font-family:var(--serif); font-weight:600;">What does one batch cost?</h3>
+          <p style="margin-top:8px;">Submit a batch, <strong style="color:var(--ink)">block until its result</strong>, submit the next.
+          Only one task is ever in flight — which isolates exactly what an engine adds per task:
+          cold start, steady-state time, jitter, CPU and memory.</p>
+          <p style="margin-top:10px;"><strong style="color:var(--ink)">5 independent trials × 20 batches</strong> per engine.</p>
+          <p class="foot-note" style="margin-top:12px;">By construction, this test <em>cannot</em> show a speedup — nothing runs concurrently.</p>
+        </div>
+        <div class="card" style="padding:24px 26px;">
+          <span class="tag">benchmark B — throughput under load</span>
+          <h3 style="font-size:19px; font-family:var(--serif); font-weight:600;">Does distribution help when work piles up?</h3>
+          <p style="margin-top:8px;">Fire <strong style="color:var(--ink)">100 batches as fast as Kafka accepts them</strong> — no
+          artificial delay — and let a real backlog form. Measure sustained throughput and how long each
+          batch waits, end to end.</p>
+          <p style="margin-top:10px;"><strong style="color:var(--ink)">4 configurations</strong>, each isolating one variable.</p>
+          <p class="foot-note" style="margin-top:12px;">This is the regime a distributed engine is actually <em>for</em>.</p>
+        </div>
+      </div>
+      <p class="kicker">A benchmark answers exactly the question it was built to ask — so we built two.</p>
+    </div>
+  </section>
+
+  <!-- ============ 8 · METHOD ============ -->
+  <section class="slide" aria-label="Method">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>07</b> · method</p>
+      <h2>The boring details that make numbers trustworthy</h2>
+      <div class="cols c2">
+        <div class="card"><span class="tag">repeated trials, not one run</span>
+          <p>Each engine ran <strong style="color:var(--ink)">5 independent trials</strong>; results report the mean and spread
+          <em>across trials</em>. One unlucky batch — a GC pause, a slow S3 fetch — can dominate a single
+          20-sample stdev; it cannot manufacture a finding five times in a row.</p></div>
+        <div class="card"><span class="tag">fresh offsets per trial</span>
+          <p>Benchmark consumers use <code class="inl">auto_offset_reset='latest'</code> with no consumer group, so each trial
+          only sees messages sent after it is ready. <code class="inl">run_trials.sh</code> polls the log for
+          <em>“Listening for work orders”</em> before firing the producer.</p></div>
+        <div class="card"><span class="tag">the python -u gotcha</span>
+          <p>Python fully buffers stdout when redirected to a file — without <code class="inl">-u</code>, the readiness line
+          never appears until the process exits, and every readiness poll times out. The trial still completes,
+          just <strong style="color:var(--ink)">~60 s slower for no reason</strong>. Unbuffered fixed it.</p></div>
+        <div class="card"><span class="tag">keys never touch a log</span>
+          <p><code class="inl">run_with_env.sh</code> evals only the two <code class="inl">export S3_*</code> lines from
+          <code class="inl">~/.bashrc</code> — credentials reach the benchmark process without ever being echoed,
+          printed, or committed.</p></div>
+      </div>
+      <p class="lede">Orchestration is two small shell scripts: <code class="inl">run_trials.sh</code> drives Benchmark&nbsp;A
+      (start engine → wait ready → fire 20 batches → wait exit → repeat ×5); <code class="inl">run_load.sh</code> does the
+      same for each Benchmark&nbsp;B configuration. Every batch lands as a row in a CSV under <code class="inl">results/</code>.</p>
+    </div>
+  </section>
+
+  <!-- ============ 9 · BENCHMARK A RESULTS ============ -->
+  <section class="slide" aria-label="Benchmark A results">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>08</b> · benchmark A — per-task overhead</p>
+      <h2>Warm speed ties; Spark pays at the edges</h2>
+      <div class="stats">
+        <div class="stat"><div class="l"><span class="dot" style="background:var(--c-seq)"></span>baseline · warm avg</div><div class="n">1.35<small>s / batch</small></div><div class="s">± 0.09 across trials</div></div>
+        <div class="stat"><div class="l"><span class="dot" style="background:var(--c-dask)"></span>dask · warm avg</div><div class="n">1.45<small>s / batch</small></div><div class="s">± 0.06 across trials</div></div>
+        <div class="stat"><div class="l"><span class="dot" style="background:var(--c-spark)"></span>spark · warm avg</div><div class="n">1.54<small>s / batch</small></div><div class="s">± 0.05 across trials</div></div>
+        <div class="stat"><div class="l">spark cpu / mem</div><div class="n">58<small>%</small> · 68<small>%</small></div><div class="s">vs ~52% · ~57–59% elsewhere</div></div>
+      </div>
+      <div class="chart-panel">
+        <div id="stripCharts"></div>
+        <details class="tbl">
+          <summary>view the per-trial numbers</summary>
+          <div class="twrap"><table>
+            <tr><th>engine</th><th>trial</th><th>cold start (s)</th><th>warm avg (s)</th><th>warm stdev (s)</th></tr>
+            <tbody id="tblA"></tbody>
+          </table></div>
+        </details>
+      </div>
+      <p class="lede" style="max-width:none">Steady state, the identical NumPy FFT dominates and the engines sit within ~0.2&nbsp;s of each other.
+      The repeatable differences live at the edges: <strong>Spark's five cold starts all land at 2.9&nbsp;s or above</strong> (JVM warm-up)
+      while Dask's never leave the 1.5–2.0&nbsp;s band, and Spark's batch-to-batch jitter averages
+      <strong>0.33&nbsp;s — roughly 80% above</strong> baseline or Dask — with its noisiest trials (0.36, 0.46&nbsp;s) unmatched anywhere else.</p>
+      <p class="kicker">One batch at a time, an engine is pure overhead. But that was only half the question.</p>
+    </div>
+  </section>
+
+  <!-- ============ 10 · BENCHMARK B SETUP ============ -->
+  <section class="slide" aria-label="Benchmark B setup">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>09</b> · benchmark B — throughput under load</p>
+      <h2>Four rungs, one variable apart</h2>
+      <div class="steps">
+        <div class="rung">
+          <span class="num">1</span>
+          <span class="name"><span class="dot" style="background:var(--c-seq)"></span>baseline · sequential</span>
+          <span class="desc">No engine, strictly one batch at a time. <em>The zero-concurrency floor</em> — what "do nothing" costs under load.</span>
+        </div>
+        <div class="rung">
+          <span class="num">2</span>
+          <span class="name"><span class="dot" style="background:var(--c-conc)"></span>baseline · 8 threads</span>
+          <span class="desc">Still no engine, still one machine — just a <code class="inl">ThreadPoolExecutor</code>. <em>Isolates whether the fix is concurrency itself</em>, or genuinely needs a cluster.</span>
+        </div>
+        <div class="rung">
+          <span class="num">3</span>
+          <span class="name"><span class="dot" style="background:var(--c-dask)"></span>dask · 3 nodes</span>
+          <span class="desc">Non-blocking <code class="inl">client.submit</code> per batch as it arrives — <em>exactly how the live processor runs</em>, now measured.</span>
+        </div>
+        <div class="rung">
+          <span class="num">4</span>
+          <span class="name"><span class="dot" style="background:var(--c-spark)"></span>spark · 3 nodes</span>
+          <span class="desc">A single <code class="inl">collect()</code> blocks, so 8 driver threads submit jobs concurrently to one shared <code class="inl">SparkContext</code> — a supported pattern.</span>
+        </div>
+      </div>
+      <div class="cols c2">
+        <div class="card"><span class="tag">the load</span>
+          <p><code class="inl">load_producer.py</code> fires <strong style="color:var(--ink)">100 batches uncapped</strong>, cycling the 31 real
+          file pairs with fresh batch ids — real physics data reprocessed, no synthetic data.</p></div>
+        <div class="card"><span class="tag">the clock</span>
+          <p>Latency is measured <strong style="color:var(--ink)">from the moment Kafka accepts the work order</strong> to the moment the
+          spectrum is done — queue time included, because queue time is the point.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 11 · BENCHMARK B RESULTS ============ -->
+  <section class="slide" aria-label="Benchmark B results">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>10</b> · benchmark B — under a real backlog</p>
+      <h2>The queue is the story</h2>
+      <div class="chart-panel">
+        <p class="chart-title">end-to-end latency per batch, in arrival order · 100 batches, uncapped</p>
+        <div class="legend">
+          <span><span class="dot" style="background:var(--c-seq)"></span>sequential</span>
+          <span><span class="dot" style="background:var(--c-conc)"></span>8 threads</span>
+          <span><span class="dot" style="background:var(--c-dask)"></span>dask · 3 nodes</span>
+          <span><span class="dot" style="background:var(--c-spark)"></span>spark · 3 nodes</span>
+        </div>
+        <div id="chartLatency"></div>
+        <details class="tbl">
+          <summary>view as table</summary>
+          <div class="twrap"><table>
+            <tr><th>configuration</th><th>throughput</th><th>p50</th><th>p95</th><th>p99</th></tr>
+            <tr><td>baseline · sequential</td><td>0.80 /s</td><td>64.2 s</td><td>119.4 s</td><td>124.2 s</td></tr>
+            <tr><td>baseline · 8 threads</td><td>1.13 /s</td><td>50.5 s</td><td>84.5 s</td><td>87.5 s</td></tr>
+            <tr><td>dask · 3 nodes</td><td>1.20 /s</td><td>43.5 s</td><td>79.8 s</td><td>82.8 s</td></tr>
+            <tr><td>spark · 3 nodes</td><td>1.21 /s</td><td>44.8 s</td><td>80.2 s</td><td>82.4 s</td></tr>
+          </table></div>
+        </details>
+      </div>
+      <p class="lede" style="max-width:none">With arrivals uncapped, every configuration falls behind — what differs is <strong>how fast the wait grows</strong>.
+      Sequential processing climbs relentlessly to a 125&nbsp;s worst case; both clusters bend the curve down to ~83&nbsp;s,
+      cutting median latency ~30% and lifting throughput ~50%. Dask and Spark are <strong>statistically indistinguishable</strong> from each other here.</p>
+    </div>
+  </section>
+
+  <!-- ============ 12 · DECOMPOSITION ============ -->
+  <section class="slide" aria-label="Where the gain comes from">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>11</b> · decomposing the win</p>
+      <h2>Most of “distributed” is just “concurrent”</h2>
+      <div class="chart-panel">
+        <p class="chart-title">sustained throughput · batches per second · 100-batch load</p>
+        <div id="chartThroughput"></div>
+      </div>
+      <div class="cols c2">
+        <div class="card"><span class="tag">threads alone: +41%</span>
+          <p>Going from sequential to 8 threads <strong style="color:var(--ink)">on the very same machine</strong> — no cluster,
+          no engine — takes 0.80 → 1.13 batches/s. That's most of the total improvement, because each batch
+          spends most of its ~1.4&nbsp;s waiting on S3, not computing.</p></div>
+        <div class="card"><span class="tag">the cluster: +6% more</span>
+          <p>Adding two more machines and a real engine takes 1.13 → 1.20–1.21 batches/s. Real, repeatable —
+          and <strong style="color:var(--ink)">modest for this I/O-bound workload</strong>. Heavier per-batch compute would grow
+          this share; these VMs and this workload put the crossover about here.</p></div>
+      </div>
+      <p class="kicker">Before you buy a cluster, stop doing one thing at a time.</p>
+    </div>
+  </section>
+
+  <!-- ============ 13 · CONCLUSIONS ============ -->
+  <section class="slide" aria-label="Conclusions">
+    <div class="slide-inner">
+      <p class="eyebrow"><b>12</b> · what we learned</p>
+      <h2>The engine matters exactly when the queue does</h2>
+      <div class="cols c2">
+        <div class="card">
+          <span class="tag">in isolation — benchmark A</span>
+          <p>For one batch at a time, engine choice barely moves speed, and overhead is all you buy:
+          Spark's JVM cold start (~3.2&nbsp;s vs ~1.7–2.0&nbsp;s) and extra jitter are repeatable costs with
+          <strong style="color:var(--ink)">no offsetting benefit at this scale</strong>. Dask stays lightest on CPU and memory.</p>
+        </div>
+        <div class="card">
+          <span class="tag">under backlog — benchmark B</span>
+          <p>Distribution genuinely helps: ~50% more throughput, ~30% lower median latency. But
+          <strong style="color:var(--ink)">most of that is ordinary concurrency</strong> — 8 threads on one box gets you from
+          0.80 to 1.13 of the final 1.21 batches/s. The cluster adds the last, modest step.</p>
+        </div>
+      </div>
+      <div class="card" style="border-color:rgba(226,161,69,.3);">
+        <span class="tag">the method finding</span>
+        <p style="font-family:var(--serif); font-size:clamp(15px,1.6vw,18px); color:var(--ink); line-height:1.6;">
+        A synchronous benchmark structurally cannot see scheduling wins; a load test cannot see per-task cost.
+        Neither result is wrong — each answers only the question it was built to ask. Ask both.</p>
+      </div>
+      <p class="foot-note">Caveats: 2&nbsp;vCPU / 4&nbsp;GB VMs and a sub-2s, I/O-bound batch — bigger machines or heavier compute shift where
+      the concurrency-vs-cluster crossover sits. Known follow-up: S3 keys passed via worker env are visible in
+      <code class="inl">ps aux</code> on the worker VMs; harden via Dask's Security config or a secrets file.<br><br>
+      Full build log, code, and raw per-batch CSVs:&nbsp;
+      <a href="https://github.com/amirh0ss3in/MAPDBProject" target="_blank" rel="noopener">github.com/amirh0ss3in/MAPDBProject</a></p>
+    </div>
+  </section>
+
+  <!-- ============ nav ============ -->
+  <div class="navbar">
+    <button class="navbtn" id="prev" aria-label="Previous slide">‹</button>
+    <button class="navbtn" id="next" aria-label="Next slide">›</button>
+    <div class="ruler" id="ruler" role="slider" aria-label="Slide position" aria-valuemin="1" aria-valuemax="13" aria-valuenow="1" tabindex="-1">
+      <div class="ticks"></div><div class="marker" id="marker"></div>
+    </div>
+    <span class="counter" id="counter"><b>01</b> / 13</span>
+    <span class="keys">← → to navigate</span>
+  </div>
+</div>
+
+<div id="tip" role="status"></div>
+
+<script>
+(function () {
+  'use strict';
+  var REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var C = { seq:'#4a90e8', conc:'#1fa878', dask:'#c98500', spark:'#d95d8d',
+            ink:'#e9edf5', ink2:'#9aa6bc', muted:'#64708a', grid:'rgba(233,237,245,0.065)',
+            axis:'rgba(233,237,245,0.18)', surface:'#121826', accent:'#e2a145' };
+
+  /* ================= data (from results/ CSVs in the repo) ================= */
+  var A = {
+    baseline: { color:C.seq,   cold:[3.065,1.334,1.425,1.861,2.208], warm:[1.334,1.228,1.483,1.314,1.379], sd:[0.239,0.040,0.210,0.303,0.158] },
+    dask:     { color:C.dask,  cold:[1.545,1.569,1.794,1.987,1.506], warm:[1.549,1.448,1.368,1.443,1.456], sd:[0.221,0.105,0.183,0.163,0.228] },
+    spark:    { color:C.spark, cold:[3.915,3.126,2.921,3.199,3.025], warm:[1.543,1.515,1.514,1.524,1.625], sd:[0.283,0.311,0.360,0.237,0.458] }
+  };
+  var LAT = {
+    seq:[2.1,3.4,4.6,6,7.2,8.4,9.8,11.1,12.4,13.6,15,16.5,17.6,18.9,20.2,21.5,22.6,23.9,25.1,26.4,27.6,28.8,30.2,31.4,32.7,34,35.2,36.4,37.8,39.1,40.3,41.5,42.7,43.9,45.1,46.5,47.7,48.9,50.2,51.4,52.7,53.9,55,56.1,57.4,58.6,59.9,61.2,62.4,63.6,64.8,66.1,67.3,68.5,69.8,71.1,72.4,73.6,74.8,76.1,77.3,78.5,79.7,80.9,82.1,83.4,84.6,85.9,87.1,88.3,89.4,90.6,91.9,93.1,94.3,95.6,96.8,98.1,99.4,100.6,101.8,103,104.4,105.6,106.8,108.1,109.3,110.7,111.9,113.1,114.4,115.5,117,118.2,119.3,120.6,121.7,122.9,124.2,125.4],
+    conc:[4.9,6.1,6.3,7,7.1,5.9,6.8,6.4,17,16.7,16.9,16.9,15.4,15.6,16.8,16.9,22.5,21.3,21.6,22.2,21.7,22.2,22.9,21.7,34.2,31.8,32.8,33.2,32.3,32.7,35.2,31.6,37.9,36.9,38.8,38.3,37.3,39.9,39.6,41.3,42.1,43.8,44.3,45.1,45.8,45.3,45.2,46.5,47.2,50.3,51,50.8,51.9,51,51.2,52.4,52.5,55.1,56.6,56.2,56.4,56.9,58,58.4,57.8,61.3,61.6,63.4,62.4,63.2,63.5,63.8,63.4,65.6,65,65.5,73.2,74.2,74.2,76.6,76.8,73.4,74.3,75.5,77.2,78.8,79.3,79.6,81,81.1,82.2,82.6,82.8,84.4,86.3,84.4,87.2,88.6,87,87.5],
+    dask:[5.1,2.9,3.9,3.1,7.8,6.1,6.7,6.6,8,10.9,9.6,10.6,11,13.2,13.2,13.3,17.8,13.8,16.2,16.8,16.3,19.9,19.6,19.5,22.4,20.2,25.5,22.8,25.3,22.6,25.2,26.5,28.2,28.8,28.8,29.5,30.5,31.6,35,32.9,33.7,36.7,37.4,37.1,40.6,37.4,40.4,39.8,43.6,40.9,43.5,44.9,43.6,47.5,46.4,45.7,50.5,48.2,51.6,49.1,53.2,50.9,54.7,52.8,57.3,54.5,58,56.1,58.5,58.4,63,60.5,62.2,61.5,64.1,63.1,66.3,66.2,65.9,68.3,68.7,69.2,69.3,71.4,73.3,71.5,72.8,75.6,75.6,75.9,79.4,75.7,78.1,79.7,79.1,80.2,82.8,82.4,82.8,83.1],
+    spark:[9.6,5.1,4.9,8.6,4.7,6.1,7.6,7.7,10.8,10.9,11.9,13.9,13.8,13.3,15.2,17.5,16.8,17.2,18.4,20.4,20.7,21.1,21.6,23.2,23.6,25.7,25.6,25.9,26.3,29.7,28.4,30.1,29.3,31.1,32,33.4,33.5,33,36.3,36.2,36.1,35.8,40.1,39.6,39,39.6,42.8,42.7,44.2,43.5,45.5,45.3,47.3,47.5,48.8,48.6,50.9,51.8,51.3,51.8,54.4,54.6,54.3,54.5,57,57.2,57.6,58.8,59.5,60.4,60.9,62.1,62.6,64.9,63.7,64.9,65.9,65.9,67.5,69.5,67.9,70.1,69.8,72.4,72.3,72.9,72.8,74.3,75.5,77.5,75.5,77.3,77.7,79.5,81.4,80.4,80.2,82.3,82.1,82.9]
+  };
+  var THR = [
+    { key:'seq',   name:'baseline · sequential', v:0.80, color:C.seq,   p:'p50 64.2s · p95 119.4s · p99 124.2s', delta:'' },
+    { key:'conc',  name:'baseline · 8 threads',  v:1.13, color:C.conc,  p:'p50 50.5s · p95 84.5s · p99 87.5s',  delta:'+41% — threads alone' },
+    { key:'dask',  name:'dask · 3 nodes',        v:1.20, color:C.dask,  p:'p50 43.5s · p95 79.8s · p99 82.8s',  delta:'+6% — the cluster' },
+    { key:'spark', name:'spark · 3 nodes',       v:1.21, color:C.spark, p:'p50 44.8s · p95 80.2s · p99 82.4s',  delta:'' }
+  ];
+
+  /* ================= tooltip ================= */
+  var tip = document.getElementById('tip');
+  function showTip(html, x, y) {
+    tip.innerHTML = html;
+    tip.style.opacity = '1';
+    var w = tip.offsetWidth;
+    var px = Math.max(10 + w / 2, Math.min(innerWidth - 10 - w / 2, x));
+    tip.style.left = (px - w / 2) + 'px';
+    tip.style.top = Math.max(8, y - tip.offsetHeight - 14) + 'px';
+  }
+  function hideTip() { tip.style.opacity = '0'; }
+
+  var fmt = function (v, d) { return v.toFixed(d === undefined ? 1 : d); };
+
+  /* ================= chart: dot strips (benchmark A) ================= */
+  function renderStrips() {
+    var host = document.getElementById('stripCharts');
+    var W = Math.max(320, host.clientWidth);
+    var engines = [
+      { key:'baseline', label:'Baseline' },
+      { key:'dask',     label:'Dask' },
+      { key:'spark',    label:'Spark' }
+    ];
+    var panels = [
+      { title:'COLD START — FIRST BATCH OF EACH TRIAL (S)', field:'cold', max:4.4, ticks:[0,1,2,3,4], unit:'s cold start' },
+      { title:'WITHIN-TRIAL JITTER — STDEV OF WARM BATCHES (S)', field:'sd', max:0.5, ticks:[0,0.1,0.2,0.3,0.4,0.5], unit:'s stdev' }
+    ];
+    var mL = 92, mR = 128, rowH = 34, padT = 20, padB = 24;
+    var html = '';
+    panels.forEach(function (p) {
+      var plotW = W - mL - mR;
+      var H = padT + rowH * 3 + padB;
+      var x = function (v) { return mL + (v / p.max) * plotW; };
+      var s = '<svg width="' + W + '" height="' + H + '" role="img" aria-label="' + p.title + '">';
+      s += '<text x="0" y="14" font-size="10.5" letter-spacing="1.3" fill="' + C.muted + '">' + p.title + '</text>';
+      p.ticks.forEach(function (t) {
+        s += '<line x1="' + x(t) + '" y1="' + padT + '" x2="' + x(t) + '" y2="' + (H - padB) + '" stroke="' + C.grid + '" stroke-width="1"/>';
+        s += '<text x="' + x(t) + '" y="' + (H - 8) + '" font-size="10" fill="' + C.muted + '" text-anchor="middle">' + t + '</text>';
+      });
+      engines.forEach(function (e, i) {
+        var cy = padT + rowH * i + rowH / 2;
+        var d = A[e.key], vals = d[p.field];
+        var mean = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+        var sd = Math.sqrt(vals.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / (vals.length - 1));
+        s += '<line x1="' + mL + '" y1="' + cy + '" x2="' + (W - mR) + '" y2="' + cy + '" stroke="' + C.grid + '" stroke-width="1"/>';
+        s += '<text x="' + (mL - 12) + '" y="' + (cy + 4) + '" font-size="12" fill="' + C.ink2 + '" text-anchor="end" font-family="var(--sans)">' + e.label + '</text>';
+        s += '<line x1="' + x(mean) + '" y1="' + (cy - 11) + '" x2="' + x(mean) + '" y2="' + (cy + 11) + '" stroke="' + d.color + '" stroke-width="2" opacity="0.85"/>';
+        vals.forEach(function (v, ti) {
+          s += '<circle class="dotmark" data-tip="' + e.label + ' · trial ' + (ti + 1) + ' — ' + fmt(v, 2) + ' ' + p.unit + '" cx="' + x(v) + '" cy="' + cy + '" r="5.5" fill="' + d.color + '" stroke="' + C.surface + '" stroke-width="2"/>';
+        });
+        s += '<text x="' + (W - mR + 14) + '" y="' + (cy + 4) + '" font-size="11.5" fill="' + C.muted + '">' + fmt(mean, 2) + ' ± ' + fmt(sd, 2) + '</text>';
+      });
+      s += '</svg>';
+      html += '<div style="margin:2px 0 4px">' + s + '</div>';
+    });
+    host.innerHTML = html;
+    host.querySelectorAll('.dotmark').forEach(function (el) {
+      el.addEventListener('mousemove', function (ev) { showTip(el.getAttribute('data-tip'), ev.clientX, ev.clientY); });
+      el.addEventListener('mouseleave', hideTip);
+    });
+  }
+
+  /* ================= chart: latency lines (benchmark B) ================= */
+  var latSeries = [
+    { key:'seq',   name:'sequential', color:C.seq },
+    { key:'conc',  name:'8 threads',  color:C.conc },
+    { key:'dask',  name:'dask',       color:C.dask },
+    { key:'spark', name:'spark',      color:C.spark }
+  ];
+  function renderLatency() {
+    var host = document.getElementById('chartLatency');
+    var W = Math.max(320, host.clientWidth);
+    var H = Math.min(360, Math.max(240, Math.round(W * 0.34)));
+    var mL = 46, mR = 64, mT = 12, mB = 30;
+    var plotW = W - mL - mR, plotH = H - mT - mB;
+    var xmax = 99, ymax = 130;
+    var x = function (i) { return mL + (i / xmax) * plotW; };
+    var y = function (v) { return mT + plotH - (v / ymax) * plotH; };
+    var s = '<svg id="latSvg" width="' + W + '" height="' + H + '" role="img" aria-label="Latency per batch for four configurations. Sequential climbs to 125 seconds; threads, Dask and Spark stay below 89.">';
+    [0, 30, 60, 90, 120].forEach(function (t) {
+      s += '<line x1="' + mL + '" y1="' + y(t) + '" x2="' + (W - mR) + '" y2="' + y(t) + '" stroke="' + C.grid + '" stroke-width="1"/>';
+      s += '<text x="' + (mL - 8) + '" y="' + (y(t) + 3.5) + '" font-size="10" fill="' + C.muted + '" text-anchor="end">' + t + 's</text>';
+    });
+    [0, 25, 50, 75, 99].forEach(function (t) {
+      s += '<text x="' + x(t) + '" y="' + (H - 8) + '" font-size="10" fill="' + C.muted + '" text-anchor="middle">' + (t === 99 ? 'batch 100' : t) + '</text>';
+    });
+    s += '<line x1="' + mL + '" y1="' + (mT + plotH) + '" x2="' + (W - mR) + '" y2="' + (mT + plotH) + '" stroke="' + C.axis + '" stroke-width="1"/>';
+    latSeries.forEach(function (ser) {
+      var d = LAT[ser.key].map(function (v, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1); }).join('');
+      s += '<path d="' + d + '" fill="none" stroke="' + ser.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+      var last = LAT[ser.key][99];
+      s += '<circle cx="' + x(99) + '" cy="' + y(last) + '" r="4.5" fill="' + ser.color + '" stroke="' + C.surface + '" stroke-width="2"/>';
+    });
+    s += '<text x="' + (x(99) + 10) + '" y="' + (y(LAT.seq[99]) + 4) + '" font-size="11" fill="' + C.ink2 + '">125 s</text>';
+    s += '<text x="' + (x(99) + 10) + '" y="' + (y(LAT.spark[99]) + 4) + '" font-size="11" fill="' + C.ink2 + '">83–88 s</text>';
+    s += '<line id="xhair" x1="0" y1="' + mT + '" x2="0" y2="' + (mT + plotH) + '" stroke="' + C.axis + '" stroke-width="1" opacity="0"/>';
+    s += '<rect id="latOverlay" x="' + mL + '" y="' + mT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/>';
+    s += '</svg>';
+    host.innerHTML = s;
+
+    var svg = document.getElementById('latSvg');
+    var overlay = document.getElementById('latOverlay');
+    var xhair = document.getElementById('xhair');
+    function onMove(ev) {
+      var r = svg.getBoundingClientRect();
+      var px = ev.clientX - r.left;
+      var i = Math.round(((px - mL) / plotW) * xmax);
+      i = Math.max(0, Math.min(xmax, i));
+      var cx = x(i);
+      xhair.setAttribute('x1', cx); xhair.setAttribute('x2', cx);
+      xhair.setAttribute('opacity', '1');
+      var html = '<div class="thead">batch ' + (i + 1) + ' · wait from send to done</div>';
+      latSeries.forEach(function (ser) {
+        html += '<div class="trow"><span class="dot" style="background:' + ser.color + '"></span>' + ser.name + ' — ' + fmt(LAT[ser.key][i]) + 's</div>';
+      });
+      showTip(html, ev.clientX, ev.clientY - 4);
+    }
+    overlay.addEventListener('mousemove', onMove);
+    overlay.addEventListener('mouseleave', function () { xhair.setAttribute('opacity', '0'); hideTip(); });
+  }
+
+  /* ================= chart: throughput bars ================= */
+  function renderBars() {
+    var host = document.getElementById('chartThroughput');
+    var W = Math.max(320, host.clientWidth);
+    var mL = Math.min(210, Math.max(150, W * 0.22)), mR = 190, mT = 8, rowH = 44, barH = 20;
+    if (W < 640) { mR = 84; }
+    var H = mT + rowH * THR.length + 26;
+    var plotW = W - mL - mR;
+    var xmax = 1.3;
+    var x = function (v) { return mL + (v / xmax) * plotW; };
+    var s = '<svg width="' + W + '" height="' + H + '" role="img" aria-label="Throughput bars: sequential 0.80, threads 1.13, Dask 1.20, Spark 1.21 batches per second.">';
+    [0, 0.5, 1.0].forEach(function (t) {
+      s += '<line x1="' + x(t) + '" y1="' + mT + '" x2="' + x(t) + '" y2="' + (H - 24) + '" stroke="' + C.grid + '" stroke-width="1"/>';
+      s += '<text x="' + x(t) + '" y="' + (H - 8) + '" font-size="10" fill="' + C.muted + '" text-anchor="middle">' + t.toFixed(1) + '</text>';
+    });
+    THR.forEach(function (d, i) {
+      var cy = mT + rowH * i + rowH / 2;
+      var bw = x(d.v) - x(0);
+      s += '<text x="' + (mL - 12) + '" y="' + (cy + 4) + '" font-size="12.5" fill="' + C.ink2 + '" text-anchor="end" font-family="var(--sans)">' + d.name + '</text>';
+      s += '<path class="barmark" data-i="' + i + '" d="M' + x(0) + ',' + (cy - barH / 2) + ' h' + Math.max(0, bw - 4) + ' a4,4 0 0 1 4,4 v' + (barH - 8) + ' a4,4 0 0 1 -4,4 h-' + Math.max(0, bw - 4) + ' z" fill="' + d.color + '"/>';
+      s += '<text x="' + (x(d.v) + 10) + '" y="' + (cy + 4) + '" font-size="12" fill="' + C.ink + '">' + d.v.toFixed(2) + ' /s</text>';
+      if (d.delta && W >= 640) {
+        s += '<text x="' + (x(d.v) + 74) + '" y="' + (cy + 4) + '" font-size="11" fill="' + C.accent + '">' + d.delta + '</text>';
+      }
+    });
+    s += '</svg>';
+    host.innerHTML = s;
+    host.querySelectorAll('.barmark').forEach(function (el) {
+      var d = THR[+el.getAttribute('data-i')];
+      el.addEventListener('mousemove', function (ev) {
+        showTip('<div class="thead">' + d.name + '</div><div class="trow">' + d.v.toFixed(2) + ' batches/s · ' + d.p + '</div>', ev.clientX, ev.clientY);
+      });
+      el.addEventListener('mouseleave', hideTip);
+    });
+  }
+
+  /* ================= benchmark A table ================= */
+  (function fillTableA() {
+    var rows = '';
+    ['baseline', 'dask', 'spark'].forEach(function (e) {
+      for (var t = 0; t < 5; t++) {
+        rows += '<tr><td>' + e + '</td><td>' + (t + 1) + '</td><td>' + fmt(A[e].cold[t], 2) + '</td><td>' + fmt(A[e].warm[t], 2) + '</td><td>' + fmt(A[e].sd[t], 3) + '</td></tr>';
+      }
+    });
+    document.getElementById('tblA').innerHTML = rows;
+  })();
+
+  /* ================= hero spectrum canvas ================= */
+  function heroSpectrum() {
+    var cv = document.getElementById('spec');
+    var ctx = cv.getContext('2d');
+    var traces = [];
+    function makeTrace() {
+      var pts = [], n = 220, seedWalk = 0;
+      for (var i = 0; i < n; i++) {
+        var f = i / (n - 1) * 2 - 1;                      /* -1 .. 1, like np.linspace */
+        seedWalk = seedWalk * 0.72 + (Math.random() - 0.5) * 0.10;
+        var noise = 0.10 + Math.abs(seedWalk) * 0.55 + Math.random() * 0.03;
+        var g = 0.028;
+        var peak = 0.72 * (g * g) / ((f - 0.18) * (f - 0.18) + g * g);
+        pts.push(Math.min(1, noise + peak));
+      }
+      return pts;
+    }
+    function draw() {
+      var dpr = window.devicePixelRatio || 1;
+      var w = cv.clientWidth, h = cv.clientHeight;
+      if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      var padL = 34, padR = 10, padT = 10, padB = 22;
+      var pw = w - padL - padR, ph = h - padT - padB;
+      ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+      ctx.font = '10px "Cascadia Mono", Consolas, monospace';
+      ctx.fillStyle = C.muted; ctx.textAlign = 'center';
+      [-1, -0.5, 0, 0.5, 1].forEach(function (f) {
+        var xx = padL + (f + 1) / 2 * pw;
+        ctx.beginPath(); ctx.moveTo(xx, padT); ctx.lineTo(xx, padT + ph); ctx.stroke();
+        ctx.fillText(f.toFixed(1), xx, h - 7);
+      });
+      [0.33, 0.66].forEach(function (r) {
+        var yy = padT + ph * r;
+        ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(padL + pw, yy); ctx.stroke();
+      });
+      ctx.textAlign = 'left';
+      ctx.fillText('f / f₀', padL, padT + 2);
+      traces.forEach(function (tr, ti) {
+        var age = traces.length - 1 - ti;
+        var alpha = age === 0 ? 0.95 : Math.max(0.06, 0.4 - age * 0.09);
+        ctx.beginPath();
+        tr.forEach(function (v, i) {
+          var xx = padL + i / (tr.length - 1) * pw;
+          var yy = padT + ph - v * ph * 0.92;
+          if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+        });
+        if (age === 0) {
+          ctx.save();
+          ctx.lineTo(padL + pw, padT + ph); ctx.lineTo(padL, padT + ph); ctx.closePath();
+          ctx.fillStyle = 'rgba(226,161,69,0.07)'; ctx.fill();
+          ctx.restore();
+          ctx.beginPath();
+          tr.forEach(function (v, i) {
+            var xx = padL + i / (tr.length - 1) * pw;
+            var yy = padT + ph - v * ph * 0.92;
+            if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+          });
+        }
+        ctx.strokeStyle = 'rgba(226,161,69,' + alpha + ')';
+        ctx.lineWidth = age === 0 ? 2 : 1.2;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+      });
+    }
+    traces.push(makeTrace()); draw();
+    if (!REDUCED) {
+      setInterval(function () {
+        traces.push(makeTrace());
+        if (traces.length > 5) traces.shift();
+        draw();
+      }, 1100);
+    }
+    addEventListener('resize', draw);
+  }
+
+  /* ================= deck navigation ================= */
+  var slides = [].slice.call(document.querySelectorAll('.slide'));
+  var N = slides.length;
+  var counter = document.getElementById('counter');
+  var marker = document.getElementById('marker');
+  var ruler = document.getElementById('ruler');
+  var cur = 0;
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function go(i, pushHash) {
+    i = Math.max(0, Math.min(N - 1, i));
+    if (i === cur && slides[i].classList.contains('on')) return;
+    slides.forEach(function (s, j) { s.classList.toggle('on', j === i); });
+    cur = i;
+    counter.innerHTML = '<b>' + pad2(i + 1) + '</b> / ' + N;
+    var frac = N > 1 ? i / (N - 1) : 0;
+    marker.style.left = 'calc(' + (frac * 100) + '% - 1px)';
+    ruler.setAttribute('aria-valuenow', String(i + 1));
+    if (pushHash !== false) { try { history.replaceState(null, '', '#s' + (i + 1)); } catch (e) {} }
+    hideTip();
+  }
+  document.getElementById('prev').addEventListener('click', function () { go(cur - 1); });
+  document.getElementById('next').addEventListener('click', function () { go(cur + 1); });
+  ruler.addEventListener('click', function (ev) {
+    var r = ruler.getBoundingClientRect();
+    go(Math.round((ev.clientX - r.left) / r.width * (N - 1)));
+  });
+  addEventListener('keydown', function (ev) {
+    if (/^(SUMMARY|BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) && (ev.key === ' ' || ev.key === 'Enter')) return;
+    if (ev.key === 'ArrowRight' || ev.key === 'PageDown' || ev.key === ' ') { ev.preventDefault(); go(cur + 1); }
+    else if (ev.key === 'ArrowLeft' || ev.key === 'PageUp') { ev.preventDefault(); go(cur - 1); }
+    else if (ev.key === 'Home') { go(0); }
+    else if (ev.key === 'End') { go(N - 1); }
+  });
+  var tx = null;
+  addEventListener('touchstart', function (ev) { tx = ev.touches[0].clientX; }, { passive: true });
+  addEventListener('touchend', function (ev) {
+    if (tx === null) return;
+    var dx = ev.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 60) go(cur + (dx < 0 ? 1 : -1));
+    tx = null;
+  }, { passive: true });
+
+  /* ================= boot ================= */
+  function renderAll() { renderStrips(); renderLatency(); renderBars(); }
+  renderAll();
+  heroSpectrum();
+  var rT;
+  addEventListener('resize', function () { clearTimeout(rT); rT = setTimeout(renderAll, 160); });
+  var m = location.hash.match(/^#s(\d+)$/);
+  go(m ? +m[1] - 1 : 0, false);
+})();
+</script>

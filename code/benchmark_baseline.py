@@ -19,7 +19,7 @@ if not S3_ACCESS or not S3_SECRET:
 # How many batches to process before stopping the benchmark
 N_BATCHES = 20
 # Where to save the benchmark results
-RESULTS_FILE = "benchmark_baseline_results.csv"
+RESULTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "benchmark_baseline_results.csv")
 
 
 # =================================================================

@@ -1,10 +1,13 @@
+import os
 import csv
 import statistics
 
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results")
+
 files = {
-    "baseline": "benchmark_baseline_results.csv",
-    "dask": "benchmark_dask_results.csv",
-    "spark": "benchmark_spark_results.csv",
+    "baseline": os.path.join(RESULTS_DIR, "benchmark_baseline_results.csv"),
+    "dask": os.path.join(RESULTS_DIR, "benchmark_dask_results.csv"),
+    "spark": os.path.join(RESULTS_DIR, "benchmark_spark_results.csv"),
 }
 
 print(f"{'Metric':<18}{'Baseline':<12}{'Dask':<12}{'Spark':<12}")

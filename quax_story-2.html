@@ -313,30 +313,10 @@
       <li>A pure-Python stack, so it's lightweight and quick to start</li>
       <li>Spark later reuses this <strong>exact same topology</strong> — a Standalone cluster across the same three machines — so both engines get compared on equal footing</li>
     </ul>
-    <div class="hook"><div class="h-inner"><span class="q">Up next —</span> let's see what "spreading the work across the cluster" actually looks like.</div></div>
+    <div class="hook"><div class="h-inner"><span class="q">Handoff →</span> Dask works well on paper. But is it the <em>right</em> tool, or just <em>a</em> tool? To find out, we need a rival — and a real benchmark.</div></div>
   </section>
 
-  <!-- 13 · INTERACTIVE: DASK DISTRIBUTE -->
-  <section class="slide">
-    <div class="eyebrow">Try it · Distribution</div>
-    <h2>Watch Dask spread the batches</h2>
-    <p class="body">This is the heart of distributed computing. Each time a batch arrives, the scheduler on the master hands it to whichever worker is free. Send a few batches and watch them land on the two workers in turn — that balancing act, done automatically, is what lets the cluster process more data than any single machine could alone.</p>
-    <div class="tool">
-      <div class="tool-bar"><span class="tool-label">Send batches to the cluster</span>
-        <button class="btn green" id="sendBatch">Send a batch →</button>
-        <button class="btn ghost" id="resetDask">reset</button>
-      </div>
-      <div class="grid3" id="daskNodes">
-        <div class="panel" style="text-align:center"><h3 style="color:var(--yellow)">master</h3><p class="muted" style="font-size:.8rem">scheduler</p><div style="font-family:var(--mono);font-size:1.3rem;margin-top:.3rem" id="n-master">·</div></div>
-        <div class="panel" style="text-align:center"><h3 style="color:var(--yellow)">worker1</h3><p class="muted" style="font-size:.8rem">10.67.22.246</p><div style="font-family:var(--mono);font-size:1.3rem;margin-top:.3rem" id="n-w1">0</div></div>
-        <div class="panel" style="text-align:center"><h3 style="color:var(--yellow)">worker2</h3><p class="muted" style="font-size:.8rem">10.67.22.248</p><div style="font-family:var(--mono);font-size:1.3rem;margin-top:.3rem" id="n-w2">0</div></div>
-      </div>
-      <p class="muted" style="font-size:.8rem;margin-top:.6rem">The numbers are batches processed per worker. The scheduler keeps them balanced.</p>
-    </div>
-    <div class="hook"><div class="h-inner"><span class="q">Handoff →</span> Dask works well. But is it the <em>right</em> tool, or just <em>a</em> tool? To find out, we need a rival — and a real benchmark.</div></div>
-  </section>
-
-  <!-- 14 · CHAPTER: ENGINE TWO -->
+  <!-- 13 · CHAPTER: ENGINE TWO -->
   <section class="slide chapter">
     <div class="ch-eye">Chapter 4 — Engine Two</div>
     <h2 style="font-size:clamp(1.7rem,4vw,3rem)">Rewind: what if it were Spark?</h2>
@@ -578,7 +558,7 @@
 
 </div>
 
-<div class="counter"><b id="cur">1</b> / <span id="total">26</span></div>
+<div class="counter"><b id="cur">1</b> / <span id="total">25</span></div>
 <div class="hint">← → or space</div>
 <div class="nav"><button id="prev" aria-label="Previous">←</button><button id="next" aria-label="Next">→</button></div>
 
@@ -643,17 +623,6 @@
     step();
   }
   document.getElementById('playPipe').addEventListener('click',playPipe);
-
-  /* 3. DASK DISTRIBUTE */
-  let dw1=0,dw2=0,turn=0;
-  document.getElementById('sendBatch').addEventListener('click',()=>{
-    const target=turn%2===0?'w1':'w2'; turn++;
-    if(target==='w1'){dw1++;document.getElementById('n-w1').textContent=dw1;flash('n-w1');}
-    else{dw2++;document.getElementById('n-w2').textContent=dw2;flash('n-w2');}
-    document.getElementById('n-master').textContent='⇄';
-  });
-  function flash(id){const el=document.getElementById(id);el.style.color='#00e5a0';setTimeout(()=>el.style.color='',400);}
-  document.getElementById('resetDask').addEventListener('click',()=>{dw1=dw2=turn=0;document.getElementById('n-w1').textContent='0';document.getElementById('n-w2').textContent='0';document.getElementById('n-master').textContent='·';});
 
   /* 4. TRIALS CONVERGE (Benchmark A, real per-trial within-trial stdev values) */
   const TRIAL_STDEV = {

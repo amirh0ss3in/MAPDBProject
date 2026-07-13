@@ -287,7 +287,7 @@ The right takeaway isn't "distributed computing doesn't matter" (Benchmark A alo
 
 ## Presentation
 
-The full project — including both benchmarks and their real numbers — is told in `quax_story-2.html`, a self-contained interactive slide deck. Open it in any web browser.
+The full project — including both benchmarks and their real numbers — is told in `quax_presentation.html`, a self-contained interactive slide deck. Open it in any web browser.
 
 ## Tests
 

@@ -9,7 +9,7 @@ The processing step is implemented on **two independent distributed engines — 
 - **Per-task overhead** — what does one batch cost, engine vs. no engine? (repeated trials, statistically real)
 - **Throughput under load** — when batches pile up faster than one machine can process them, does distribution actually help?
 
-For the full build log — infrastructure, design decisions, and the reasoning behind them — see **[what_we_did.md](what_we_did.md)**. For a visual walkthrough of the whole story (including the flawed first benchmark and how it got fixed), open **[quax_presentation.html](quax_presentation.html)** in a browser.
+For the full build log — infrastructure, design decisions, and the reasoning behind them — see **[what_we_did.md](what_we_did.md)**. For a visual walkthrough of the whole story (including the flawed first benchmark and how it got fixed), open **[quax_presentation.html](https://amirh0ss3in.github.io/Presentations/quax_presentation_fixed.html)** in a browser.
 
 ## Project Layout
 

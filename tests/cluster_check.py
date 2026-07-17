@@ -1,12 +1,15 @@
-from dask.distributed import Client, SSHCluster
+from pyspark.sql import SparkSession
 
 print("Starting cluster... this takes a few seconds...")
-cluster = SSHCluster(
-    ["master", "worker1", "worker2"],
-    connect_options={"known_hosts": None},
-    scheduler_options={"port": 8786, "dashboard_address": ":8797"}
+spark = (
+    SparkSession.builder
+    .appName("cluster_check")
+    .master("spark://master:7077")
+    .getOrCreate()
 )
 
-client = Client(cluster)
 print("CLUSTER IS ALIVE!")
-print(client)
+print(spark.sparkContext)
+print("Workers:", spark.sparkContext.defaultParallelism)
+
+spark.stop()

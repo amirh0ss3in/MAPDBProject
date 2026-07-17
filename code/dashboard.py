@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Live QUAX ingestion + cluster-routing monitor. Run with: bokeh serve --show dashboard.py"""
+"""Live QUAX ingestion + spectrum + cluster-routing monitor. Run with: bokeh serve --show dashboard.py"""
 import json, time
 from kafka import KafkaConsumer
 from bokeh.plotting import figure, curdoc
-from bokeh.models import ColumnDataSource, Div
+from bokeh.models import ColumnDataSource, Band, Div
 from bokeh.layouts import column, row
+from bokeh.palettes import Category10
 
 MB = 1024 * 1024
 WINDOW = 100
@@ -23,35 +24,71 @@ telemetry_consumer = KafkaConsumer(
 results_consumer = KafkaConsumer(
     "quax_results", bootstrap_servers="localhost:9092",
     auto_offset_reset="latest", consumer_timeout_ms=1,
+    value_deserializer=lambda v: json.loads(v),
 )
 
-src = ColumnDataSource(dict(t=[], rate=[]))
-state = dict(start=time.time(), last_t=None, n=0)
+
+def styled(title, x_label, y_label, height=350):
+    p = figure(title=title, x_axis_label=x_label, y_axis_label=y_label,
+               width=850, height=height, background_fill_color="#111318", border_fill_color="#111318")
+    p.title.text_color = p.xaxis.axis_label_text_color = p.yaxis.axis_label_text_color = "#ddd"
+    p.xaxis.major_label_text_color = p.yaxis.major_label_text_color = "#aaa"
+    p.grid.grid_line_color = "#2a2d34"
+    return p
+
+
+# --- stream ingestion throughput ---
+rate_src = ColumnDataSource(dict(t=[], rate=[]))
+rate_state = dict(start=time.time(), last_t=None, n=0)
 status = Div(text="Waiting for data...", styles={"color": "#ccc", "font-size": "16px"})
 
-p = figure(title="QUAX stream ingestion", x_axis_label="Time (s)", y_axis_label="Current throughput (MB/s)",
-           width=850, height=350, background_fill_color="#111318", border_fill_color="#111318")
-p.title.text_color = p.xaxis.axis_label_text_color = p.yaxis.axis_label_text_color = "#ddd"
-p.xaxis.major_label_text_color = p.yaxis.major_label_text_color = "#aaa"
-p.grid.grid_line_color = "#2a2d34"
-p.line("t", "rate", source=src, line_width=2, color="#4fc3f7")
-p.circle("t", "rate", source=src, size=6, color="#4fc3f7")
+p_rate = styled("QUAX stream ingestion", "Time (s)", "Current throughput (MB/s)")
+p_rate.line("t", "rate", source=rate_src, line_width=2, color="#4fc3f7")
+p_rate.circle("t", "rate", source=rate_src, size=6, color="#4fc3f7")
 
 
 def poll_stream():
     for msg in stream_consumer:
         now = time.time()
-        dt = now - state["last_t"] if state["last_t"] else None
-        state["last_t"], state["n"] = now, state["n"] + 1
+        dt = now - rate_state["last_t"] if rate_state["last_t"] else None
+        rate_state["last_t"], rate_state["n"] = now, rate_state["n"] + 1
         rate = (len(msg.value) / MB) / dt if dt else 0
-        src.stream(dict(t=[now - state["start"]], rate=[rate]), rollover=WINDOW)
+        rate_src.stream(dict(t=[now - rate_state["start"]], rate=[rate]), rollover=WINDOW)
         file_id = dict(msg.headers).get("file_id", b"?").decode() if msg.headers else "?"
-        status.text = f"Chunks received: {state['n']} | Current rate: {rate:.1f} MB/s | Latest: {file_id}"
+        status.text = f"Chunks received: {rate_state['n']} | Current rate: {rate:.1f} MB/s | Latest: {file_id}"
 
 
+# --- power spectrum: latest batch + cumulative average ---
+latest_src = ColumnDataSource(dict(freq=[], value=[], lo=[], hi=[]))
+cum_src = ColumnDataSource(dict(freq=[], value=[]))
+cum_state = dict(n=0, sum=None, freq=None)
+result_count = [0]
+
+p_latest = styled("Latest batch — power spectrum", "Frequency (Hz)", "Power")
+p_latest.add_layout(Band(base="freq", lower="lo", upper="hi", source=latest_src,
+                          fill_alpha=0.25, fill_color=Category10[3][0]))
+p_latest.line("freq", "value", source=latest_src, line_width=2, color=Category10[3][0])
+
+p_cum = styled("Cumulative run average", "Frequency (Hz)", "Power")
+p_cum.line("freq", "value", source=cum_src, line_width=2, color=Category10[3][1])
+
+
+def poll_results():
+    for msg in results_consumer:
+        result_count[0] += 1
+        d = msg.value["average"]
+        freq, value, rms = d["frequency"], d["value"], d["rms"]
+        latest_src.data = dict(freq=freq, value=value,
+                                lo=[v - r for v, r in zip(value, rms)],
+                                hi=[v + r for v, r in zip(value, rms)])
+        cum_state["sum"] = value if cum_state["sum"] is None else [s + v for s, v in zip(cum_state["sum"], value)]
+        cum_state["freq"], cum_state["n"] = freq, cum_state["n"] + 1
+        cum_src.data = dict(freq=cum_state["freq"], value=[s / cum_state["n"] for s in cum_state["sum"]])
+
+
+# --- cluster routing ---
 node_counts = {host: 0 for host in NODES}
 node_active = {host: 0 for host in NODES}
-result_count = [0]
 node_boxes = {
     host: Div(width=270, height=90, styles={
         "border": "1px solid #2a2d34", "border-radius": "12px", "padding": "12px",
@@ -83,15 +120,10 @@ def poll_telemetry():
         render_node(host)
 
 
-def poll_results():
-    for _ in results_consumer:
-        result_count[0] += 1
-
-
 def poll():
     poll_stream()
-    poll_telemetry()
     poll_results()
+    poll_telemetry()
 
 
 for host in NODES:
@@ -100,6 +132,6 @@ for host in NODES:
 curdoc().add_periodic_callback(poll, 500)
 curdoc().title = "QUAX Stream Monitor"
 curdoc().add_root(column(
-    status, p,
+    status, p_rate, p_latest, p_cum,
     row(node_boxes["mapd-master"], node_boxes["mapd-master1"], node_boxes["mapd-master2"]),
 ))

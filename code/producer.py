@@ -24,8 +24,10 @@ def prefetch(s3, pairs, n_pairs, q):
     sent, cycle = 0, 0
     while n_pairs is None or sent < n_pairs:
         for i_key, q_key in pairs:
+            t0 = time.time()
             i_bytes = s3.get_object(Bucket=BUCKET, Key=i_key)["Body"].read()
             q_bytes = s3.get_object(Bucket=BUCKET, Key=q_key)["Body"].read()
+            print(f"[{time.time():.3f}] fetched {i_key}#{cycle} in {time.time() - t0:.2f}s", flush=True)
             q.put((f"{i_key}#{cycle}", i_bytes, q_bytes))
             sent += 1
             if n_pairs is not None and sent >= n_pairs:
@@ -66,7 +68,7 @@ def ensure_kafka(bootstrap_servers):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rate", type=float, default=1.0, help="multiplier on the real ~5s/pair DAQ cadence")
+    ap.add_argument("--rate", type=float, default=1.0, help="multiplier on the real ~4.2s/pair DAQ cadence")
     ap.add_argument("--chunk-mb", type=float, default=8.0, help="per-channel chunk size sent per Kafka message")
     ap.add_argument("--n-pairs", type=int, default=None)
     ap.add_argument("--topic", default="quax_stream")
@@ -83,13 +85,16 @@ def main():
 
     chunk = int(args.chunk_mb * 1024 * 1024)
     n_chunks = -(-FILE_SIZE // chunk)
-    interval = (5.0 / args.rate) / n_chunks
+    # 4.2s/pair is the real DAQ cadence: 2**23 samples per file at 2 MS/s.
+    interval = (4.2 / args.rate) / n_chunks
     while (item := q.get()) is not None:
         file_id, i_bytes, q_bytes = item
         for chunk_idx in range(n_chunks):
             sl = slice(chunk_idx * chunk, (chunk_idx + 1) * chunk)
+            t0 = time.time()
             producer.send(args.topic, key=file_id.encode(), value=i_bytes[sl] + q_bytes[sl],
                           headers=[("file_id", file_id.encode()), ("chunk_idx", str(chunk_idx).encode())]).get(timeout=30)
+            print(f"[{time.time():.3f}] sent {file_id} chunk {chunk_idx} (ack {time.time() - t0:.2f}s)", flush=True)
             time.sleep(interval)
     producer.flush()
 

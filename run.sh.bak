@@ -50,12 +50,6 @@ stop() {
     fi
     # Safety net: a crashed run can leave the Spark driver JVM orphaned.
     pkill -f 'SparkSubmit.*[q]uax-processor' 2>/dev/null
-    # Safety net: ensure_spark() in streaming_job.py starts standalone Master/Worker
-    # daemons that outlive this script's PIDFILE — without this they leak across runs.
-    pkill -f 'org.apache.spark.deploy.master.[M]aster' 2>/dev/null
-    for w in worker1 worker2; do
-        ssh "$w" "pkill -f 'org.apache.spark.deploy.worker.[W]orker'" 2>/dev/null
-    done
     echo "Stopped."
 }
 

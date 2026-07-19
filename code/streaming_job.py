@@ -64,7 +64,7 @@ def main():
         SparkSession.builder.appName("quax-processor")
         .master("spark://master:7077")
         .config("spark.executor.memory", "512m")
-        .config("spark.driver.memory", "512m")
+        .config("spark.driver.memory", "1g")
         .getOrCreate()
     )
     sc = spark.sparkContext
@@ -80,15 +80,25 @@ def main():
     acc = {}  # file_id -> (sum, sumsq, count)
     print("Listening for chunks...", flush=True)
 
+    # Cap the data shipped per Spark job: chunks ride inside task closures through the
+    # driver JVM, so an uncapped drain (e.g. a fast producer or a backlog after a stall)
+    # can put hundreds of MB on a 1g driver heap at once and OOM it.
+    max_chunks_per_job = 8
+
     while True:
         batch = []
+        t_wait = time.time()
         for msg in consumer:
             headers = dict(msg.headers)
             batch.append((headers["file_id"].decode(), int(headers["chunk_idx"].decode()), msg.value))
+            if len(batch) >= max_chunks_per_job:
+                break
         if not batch:
             continue
 
+        t0 = time.time()
         results = sc.parallelize(batch, numSlices=len(batch)).map(process_chunk).collect()
+        print(f"[{time.time():.3f}] batch of {len(batch)} chunk(s): waited {t0 - t_wait:.2f}s, spark job {time.time() - t0:.2f}s", flush=True)
         for file_id, chunk_idx, host, s, sq, n in results:
             producer.send("quax_telemetry", {"file_id": file_id, "chunk_idx": chunk_idx, "host": host})
             total, total_sq, count = acc.get(file_id, (np.zeros(NBINS), np.zeros(NBINS), 0))

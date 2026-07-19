@@ -73,6 +73,9 @@ def main():
     consumer = KafkaConsumer(
         "quax_stream", bootstrap_servers="localhost:9092", auto_offset_reset="latest",
         fetch_max_bytes=64 * MB, max_partition_fetch_bytes=64 * MB, consumer_timeout_ms=500,
+        # A named, committed-offset group lets anything external (the dashboard's backlog
+        # graph) compute lag = latest topic offset - this group's committed offset.
+        group_id="quax-processor",
     )
     producer = KafkaProducer(bootstrap_servers="localhost:9092",
                               value_serializer=lambda v: json.dumps(v).encode())
@@ -87,7 +90,6 @@ def main():
 
     while True:
         batch = []
-        t_wait = time.time()
         for msg in consumer:
             headers = dict(msg.headers)
             batch.append((headers["file_id"].decode(), int(headers["chunk_idx"].decode()), msg.value))
@@ -96,9 +98,7 @@ def main():
         if not batch:
             continue
 
-        t0 = time.time()
         results = sc.parallelize(batch, numSlices=len(batch)).map(process_chunk).collect()
-        print(f"[{time.time():.3f}] batch of {len(batch)} chunk(s): waited {t0 - t_wait:.2f}s, spark job {time.time() - t0:.2f}s", flush=True)
         for file_id, chunk_idx, host, s, sq, n in results:
             producer.send("quax_telemetry", {"file_id": file_id, "chunk_idx": chunk_idx, "host": host})
             total, total_sq, count = acc.get(file_id, (np.zeros(NBINS), np.zeros(NBINS), 0))

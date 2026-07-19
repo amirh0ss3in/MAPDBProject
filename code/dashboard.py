@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Live QUAX ingestion + spectrum + cluster-routing monitor. Run with: bokeh serve --show dashboard.py"""
 import json, time, urllib.request, urllib.error
-from kafka import KafkaConsumer, KafkaProducer
+from kafka import KafkaConsumer, KafkaProducer, TopicPartition
+from kafka.admin import KafkaAdminClient
 from kafka.errors import NoBrokersAvailable
 from bokeh.plotting import figure, curdoc
 from bokeh.models import ColumnDataSource, Band, Div
@@ -15,6 +16,9 @@ NODES = {"mapd-master": "Master", "mapd-master1": "Worker 1", "mapd-master2": "W
 # (keyed by socket.gethostname()) and pulled cluster health (keyed by IP) need this bridge.
 WORKER_IP = {"mapd-master1": "10.67.22.246", "mapd-master2": "10.67.22.248"}
 SPARK_MASTER_API = "http://master:8080/json/"
+# Must match streaming_job.py's KafkaConsumer(group_id=...) on quax_stream.
+CONSUMER_GROUP = "quax-processor"
+STREAM_TP = TopicPartition("quax_stream", 0)
 
 stream_consumer = KafkaConsumer(
     "quax_stream", bootstrap_servers="localhost:9092",
@@ -70,6 +74,37 @@ def poll_stream():
     status.text = f"Chunks received: {rate_state['n']} | Current rate: {rate:.1f} MB/s | Latest: {rate_state['file_id']}"
     kafka_rates["quax_stream"] = rate
     rate_state["bytes"], rate_state["last_poll"] = 0, now
+
+
+# --- processing backlog: is Spark keeping pace with the producer, or falling behind? ---
+# p_rate above measures producer->Kafka arrival rate; it stays a healthy-looking number
+# even while Spark falls hopelessly behind, since it never looks at whether anything got
+# consumed. Backlog = (latest quax_stream offset) - (streaming_job's committed offset) is
+# the one number that actually answers "can the pipeline withstand this throughput".
+backlog_src = ColumnDataSource(dict(t=[], backlog=[]))
+backlog_state = dict(start=time.time())
+
+p_backlog = styled("Processing backlog", "Time (s)", "Chunks behind")
+p_backlog.line("t", "backlog", source=backlog_src, line_width=2, color="#ff6b6b")
+p_backlog.circle("t", "backlog", source=backlog_src, size=6, color="#ff6b6b")
+
+
+def poll_backlog():
+    try:
+        # A fresh AdminClient each tick mirrors poll_cluster_health's KafkaProducer probe:
+        # both eagerly connect/probe API versions at construction, so building one once at
+        # import time would crash dashboard.py's startup if Kafka isn't up yet.
+        admin = KafkaAdminClient(bootstrap_servers="localhost:9092", api_version_auto_timeout_ms=1000)
+        try:
+            end_offset = stream_consumer.end_offsets([STREAM_TP])[STREAM_TP]
+            committed = admin.list_consumer_group_offsets(group_id=CONSUMER_GROUP)
+            processed = committed[STREAM_TP].offset if STREAM_TP in committed else end_offset
+            lag = max(0, end_offset - processed)
+        finally:
+            admin.close()
+    except NoBrokersAvailable:
+        return
+    backlog_src.stream(dict(t=[time.time() - backlog_state["start"]], backlog=[lag]), rollover=WINDOW)
 
 
 # --- power spectrum: latest batch + cumulative average ---
@@ -263,16 +298,26 @@ def poll():
 
 
 poll_cluster_health()
+poll_backlog()
 render_topology()
 
 curdoc().add_periodic_callback(poll, 500)
 curdoc().add_periodic_callback(poll_cluster_health, 2000)
+curdoc().add_periodic_callback(poll_backlog, 2000)
 curdoc().title = "QUAX Stream Monitor"
 curdoc().add_root(column(
     status,
     p_rate,
     caption("Each point is one raw chunk landing from the DAQ producer, plotted as its arrival speed in MB/s. "
-            "This is the pipeline's pulse — how fast IQ samples are streaming in right now, not physics yet."),
+            "This is the pipeline's pulse — how fast IQ samples are streaming in right now, not physics yet. "
+            "This measures the producer's send rate into Kafka, not whether Spark can keep up with it — "
+            "see Processing backlog below for that."),
+    p_backlog,
+    caption("Chunks sent minus chunks Spark has confirmed processing (via streaming_job.py's committed Kafka "
+            "offset). Healthy looks like a sawtooth — rising between micro-batches, then dropping back toward "
+            "zero as each one completes, never climbing higher over time. A baseline that keeps climbing and "
+            "stops returning to zero means chunks are piling up faster than Spark can drain them — the "
+            "throughput above is too high to sustain."),
     p_latest,
     caption("Blue line: this batch's power spectrum — ~4096 scans FFT'd and averaged for one pair of DAQ files. "
             "Grey band: ±1 std-dev spread across those scans, i.e. where the noise lives. "

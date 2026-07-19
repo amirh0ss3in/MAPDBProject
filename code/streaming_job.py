@@ -7,6 +7,9 @@ import json, os, socket, subprocess, time
 PYTHON_BIN = "/home/ubuntu/pyvenv/bin/python3"
 os.environ["PYSPARK_PYTHON"] = PYTHON_BIN
 os.environ["PYSPARK_DRIVER_PYTHON"] = PYTHON_BIN
+# Never attach to a stale gateway JVM leaked into this shell by a previous crashed run.
+os.environ.pop("PYSPARK_GATEWAY_PORT", None)
+os.environ.pop("PYSPARK_GATEWAY_SECRET", None)
 
 import numpy as np
 from kafka import KafkaConsumer, KafkaProducer
@@ -60,8 +63,8 @@ def main():
     spark = (
         SparkSession.builder.appName("quax-processor")
         .master("spark://master:7077")
-        .config("spark.executor.memory", "1g")
-        .config("spark.driver.memory", "1g")
+        .config("spark.executor.memory", "512m")
+        .config("spark.driver.memory", "512m")
         .getOrCreate()
     )
     sc = spark.sparkContext

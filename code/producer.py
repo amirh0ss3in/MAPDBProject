@@ -34,9 +34,20 @@ def prefetch(s3, pairs, n_pairs, q):
     q.put(None)
 
 
+def cap_quax_stream(bootstrap_servers):
+    # quax_stream carries raw multi-MB chunks; without a retention cap it fills the disk
+    # within a long/high-rate run since Kafka never expires data just because it's been read.
+    subprocess.run(f"{KAFKA_HOME}/bin/kafka-topics.sh --bootstrap-server {bootstrap_servers} "
+                   f"--create --if-not-exists --topic quax_stream --partitions 1 --replication-factor 1", shell=True)
+    subprocess.run(f"{KAFKA_HOME}/bin/kafka-configs.sh --bootstrap-server {bootstrap_servers} --alter "
+                   f"--entity-type topics --entity-name quax_stream --add-config "
+                   f"retention.bytes=209715200,segment.bytes=67108864,retention.ms=600000", shell=True)
+
+
 def ensure_kafka(bootstrap_servers):
     try:
         KafkaProducer(bootstrap_servers=bootstrap_servers, api_version_auto_timeout_ms=3000).close()
+        cap_quax_stream(bootstrap_servers)
         return
     except NoBrokersAvailable:
         pass
@@ -46,6 +57,7 @@ def ensure_kafka(bootstrap_servers):
     for _ in range(30):
         try:
             KafkaProducer(bootstrap_servers=bootstrap_servers, api_version_auto_timeout_ms=3000).close()
+            cap_quax_stream(bootstrap_servers)
             return
         except NoBrokersAvailable:
             time.sleep(2)

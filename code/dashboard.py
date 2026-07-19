@@ -28,8 +28,12 @@ results_consumer = KafkaConsumer(
 )
 
 
-def styled(title, x_label, y_label, height=350):
-    p = figure(title=title, x_axis_label=x_label, y_axis_label=y_label,
+def caption(text):
+    return Div(text=f'<div style="color:#8a8f98;font-size:13px;max-width:850px;padding:2px 0 10px 0">{text}</div>')
+
+
+def styled(title, x_label, y_label, height=350, y_axis_type="linear"):
+    p = figure(title=title, x_axis_label=x_label, y_axis_label=y_label, y_axis_type=y_axis_type,
                width=850, height=height, background_fill_color="#111318", border_fill_color="#111318")
     p.title.text_color = p.xaxis.axis_label_text_color = p.yaxis.axis_label_text_color = "#ddd"
     p.xaxis.major_label_text_color = p.yaxis.major_label_text_color = "#aaa"
@@ -39,7 +43,7 @@ def styled(title, x_label, y_label, height=350):
 
 # --- stream ingestion throughput ---
 rate_src = ColumnDataSource(dict(t=[], rate=[]))
-rate_state = dict(start=time.time(), last_t=None, n=0)
+rate_state = dict(start=time.time(), last_poll=time.time(), bytes=0, n=0, file_id="?")
 status = Div(text="Waiting for data...", styles={"color": "#ccc", "font-size": "16px"})
 
 p_rate = styled("QUAX stream ingestion", "Time (s)", "Current throughput (MB/s)")
@@ -49,13 +53,16 @@ p_rate.circle("t", "rate", source=rate_src, size=6, color="#4fc3f7")
 
 def poll_stream():
     for msg in stream_consumer:
-        now = time.time()
-        dt = now - rate_state["last_t"] if rate_state["last_t"] else None
-        rate_state["last_t"], rate_state["n"] = now, rate_state["n"] + 1
-        rate = (len(msg.value) / MB) / dt if dt else 0
-        rate_src.stream(dict(t=[now - rate_state["start"]], rate=[rate]), rollover=WINDOW)
-        file_id = dict(msg.headers).get("file_id", b"?").decode() if msg.headers else "?"
-        status.text = f"Chunks received: {rate_state['n']} | Current rate: {rate:.1f} MB/s | Latest: {file_id}"
+        rate_state["bytes"] += len(msg.value)
+        rate_state["n"] += 1
+        if msg.headers:
+            rate_state["file_id"] = dict(msg.headers).get("file_id", b"?").decode()
+    now = time.time()
+    dt = now - rate_state["last_poll"]
+    rate = (rate_state["bytes"] / MB) / dt if dt else 0
+    rate_src.stream(dict(t=[now - rate_state["start"]], rate=[rate]), rollover=WINDOW)
+    status.text = f"Chunks received: {rate_state['n']} | Current rate: {rate:.1f} MB/s | Latest: {rate_state['file_id']}"
+    rate_state["bytes"], rate_state["last_poll"] = 0, now
 
 
 # --- power spectrum: latest batch + cumulative average ---
@@ -64,12 +71,12 @@ cum_src = ColumnDataSource(dict(freq=[], value=[]))
 cum_state = dict(n=0, sum=None, freq=None)
 result_count = [0]
 
-p_latest = styled("Latest batch — power spectrum", "Frequency (Hz)", "Power")
+p_latest = styled("Latest batch — power spectrum", "Frequency (Hz)", "Power", y_axis_type="log")
 p_latest.add_layout(Band(base="freq", lower="lo", upper="hi", source=latest_src,
                           fill_alpha=0.25, fill_color=Category10[3][0]))
 p_latest.line("freq", "value", source=latest_src, line_width=2, color=Category10[3][0])
 
-p_cum = styled("Cumulative run average", "Frequency (Hz)", "Power")
+p_cum = styled("Cumulative run average", "Frequency (Hz)", "Power", y_axis_type="log")
 p_cum.line("freq", "value", source=cum_src, line_width=2, color=Category10[3][1])
 
 
@@ -132,6 +139,17 @@ for host in NODES:
 curdoc().add_periodic_callback(poll, 500)
 curdoc().title = "QUAX Stream Monitor"
 curdoc().add_root(column(
-    status, p_rate, p_latest, p_cum,
+    status,
+    p_rate,
+    caption("Each point is one raw chunk landing from the DAQ producer, plotted as its arrival speed in MB/s. "
+            "This is the pipeline's pulse — how fast IQ samples are streaming in right now, not physics yet."),
+    p_latest,
+    caption("Blue line: this batch's power spectrum — ~4096 scans FFT'd and averaged for one pair of DAQ files. "
+            "Grey band: ±1 std-dev spread across those scans, i.e. where the noise lives. "
+            "A real axion signal would show up as a steady bump poking above that noise."),
+    p_cum,
+    caption("The same spectrum, averaged over every batch since the run started. Random noise cancels out as more "
+            "batches pile in, while any real steady feature keeps adding up — so this curve should get cleaner, "
+            "and any true signal sharper, the longer you watch."),
     row(node_boxes["mapd-master"], node_boxes["mapd-master1"], node_boxes["mapd-master2"]),
 ))

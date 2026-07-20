@@ -41,6 +41,8 @@ Benchmarked against the three required operating points — the nominal 16MB/s D
 | 1.0x | 16 MB/s | 640/640 | 35 chunks | Sustained, drained to 0 |
 | 2.0x | 32 MB/s | 640/640 | 72 chunks | Sustained, drained to 0, no OOM |
 
-![Throughput and processing backlog at 0.5x/1x/2x the DAQ target, each with a moving average](benchmarks/benchmark.png)
+Throughput is measured independently on both sides: producer→Kafka (end-offset growth) and Spark's processing rate (the `quax-processor` group's committed-offset growth). The two curves coincide at every rate — direct evidence the processor sustains the producer. Spark's own view is available live at `master:8080` (cluster) and `master:4040` (running app, one job per micro-batch) while the pipeline runs.
+
+![Producer vs Spark throughput and processing backlog at 0.5x/1x/2x the DAQ target](benchmarks/benchmark.png)
 
 Backlog is a genuine sawtooth — Spark commits in discrete micro-batches, sampled every 2s — so the moving average is what actually shows the trend: flat at every rate, never climbing. Raw logs, the plotting script, and this figure are in `benchmarks/`.

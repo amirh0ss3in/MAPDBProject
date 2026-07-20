@@ -15,7 +15,8 @@ INK_MUTED = "#898781"
 GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 SURFACE = "#fcfcfb"
-BLUE = "#2a78d6"     # throughput column
+BLUE = "#2a78d6"     # producer throughput
+GREEN = "#008300"    # Spark-side (committed) throughput
 ORANGE = "#eb6834"   # backlog column
 
 CHUNK_BYTES = 2 * 1 * 1024 * 1024  # 1MB/channel x2 (i+q) at --chunk-mb default of 1.0
@@ -38,33 +39,34 @@ LINE_RE = re.compile(r"t=([\d.]+)s end=(\d+) committed=(\d+) lag=(\d+)")
 
 
 def parse(path):
-    ts, ends, lags = [], [], []
+    ts, ends, comms, lags = [], [], [], []
     with open(path) as f:
         for line in f:
             m = LINE_RE.match(line)
             if m:
                 ts.append(float(m.group(1)))
                 ends.append(int(m.group(2)))
+                comms.append(int(m.group(3)))
                 lags.append(int(m.group(4)))
-    return np.array(ts), np.array(ends), np.array(lags)
+    return np.array(ts), np.array(ends), np.array(comms), np.array(lags)
 
 
 TAIL_BUFFER_S = 12.0  # confirm drain-to-zero without dragging in the rest of the idle log
 
 
-def trim_to_active(ts, ends, lags):
+def trim_to_active(ts, ends, comms, lags):
     """Drop the leading dead time before the producer actually starts sending
     (Spark cluster cold-start) and the long idle tail after it's done, keeping just
     enough of the tail to confirm backlog actually returns to and stays at zero."""
     diffs = np.diff(ends)
     nonzero = np.flatnonzero(diffs > 0)
     start = nonzero[0] if len(nonzero) else 0
-    ts, ends, lags = ts[start:] - ts[start], ends[start:], lags[start:]
+    ts, ends, comms, lags = ts[start:] - ts[start], ends[start:], comms[start:], lags[start:]
 
     active = np.flatnonzero(lags > 0)
     last_active_t = ts[active[-1]] if len(active) else ts[-1]
     keep = ts <= last_active_t + TAIL_BUFFER_S
-    return ts[keep], ends[keep], lags[keep]
+    return ts[keep], ends[keep], comms[keep], lags[keep]
 
 
 def moving_average(x, window):
@@ -87,11 +89,15 @@ def throughput_series(ts, ends):
 fig, axes = plt.subplots(3, 2, figsize=(11, 8.5), facecolor=SURFACE)
 
 for row, (fname, label, target_mb_s) in enumerate(RUNS):
-    ts, ends, lags = parse(fname)
-    ts, ends, lags = trim_to_active(ts, ends, lags)
+    ts, ends, comms, lags = parse(fname)
+    ts, ends, comms, lags = trim_to_active(ts, ends, comms, lags)
 
     t_thr, thr = throughput_series(ts, ends)
     thr_ma = moving_average(thr, MA_WINDOW)
+    # Spark-side throughput: rate at which the quax-processor group's committed
+    # offset advances — i.e. chunks Spark has confirmed processing, not just received.
+    t_proc, proc = throughput_series(ts, comms)
+    proc_ma = moving_average(proc, MA_WINDOW)
     lag_ma = moving_average(lags, MA_WINDOW)
 
     ax_thr, ax_bl = axes[row, 0], axes[row, 1]
@@ -107,9 +113,11 @@ for row, (fname, label, target_mb_s) in enumerate(RUNS):
 
     # --- throughput panel ---
     ax_thr.plot(t_thr, thr, color=BLUE, alpha=0.35, linewidth=1.0, marker="o",
-                markersize=3, zorder=2, label="Achieved (raw)")
+                markersize=3, zorder=2, label="Producer (raw)")
     ax_thr.plot(t_thr, thr_ma, color=BLUE, linewidth=2.0, zorder=3,
-                label=f"Achieved ({MA_WINDOW}-sample moving avg)")
+                label=f"Producer ({MA_WINDOW}-sample moving avg)")
+    ax_thr.plot(t_proc, proc_ma, color=GREEN, linewidth=2.0, zorder=3,
+                label=f"Spark processed ({MA_WINDOW}-sample moving avg)")
     ax_thr.axhline(target_mb_s, color=INK_SECONDARY, linewidth=1.2, linestyle=(0, (4, 3)),
                    zorder=1, label="Target")
     ax_thr.set_ylim(0, target_mb_s * 1.6)
@@ -129,7 +137,7 @@ for row, (fname, label, target_mb_s) in enumerate(RUNS):
         ax_thr.set_xlabel("Time since producer started (s)")
         ax_bl.set_xlabel("Time since producer started (s)")
 
-axes[0, 0].set_title("Throughput: producer -> Kafka", loc="right", color=INK_MUTED, fontsize=9, style="italic")
+axes[0, 0].set_title("Throughput: producer vs Spark", loc="right", color=INK_MUTED, fontsize=9, style="italic")
 axes[0, 1].set_title("Processing backlog: is Spark keeping up?", loc="right", color=INK_MUTED, fontsize=9, style="italic")
 
 handles, labels = axes[1, 0].get_legend_handles_labels()

@@ -40,7 +40,11 @@ start() {
         > "$LOGDIR/bokeh.log" 2>&1 &
     echo $! >> "$PIDFILE"
 
-    echo "Started. Logs in $LOGDIR — dashboard: http://localhost:5006/dashboard"
+    echo "Started. Logs in $LOGDIR"
+    echo "  our dashboard:    http://localhost:5006/dashboard"
+    echo "  Spark app UI:     http://localhost:4040   (jobs = micro-batches; live while processor runs)"
+    echo "  Spark master UI:  http://localhost:8080   (workers/executors)"
+    echo "  From your laptop: ssh -L 5006:localhost:5006 -L 4040:localhost:4040 -L 8080:localhost:8080 master"
 }
 
 stop() {

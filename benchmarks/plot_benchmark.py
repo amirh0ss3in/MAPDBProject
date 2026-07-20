@@ -16,7 +16,7 @@ GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 SURFACE = "#fcfcfb"
 BLUE = "#2a78d6"     # producer throughput
-GREEN = "#008300"    # Spark-side (committed) throughput
+GREEN = "#008300"    # Spark-side throughput
 ORANGE = "#eb6834"   # backlog column
 
 CHUNK_BYTES = 2 * 1 * 1024 * 1024  # 1MB/channel x2 (i+q) at --chunk-mb default of 1.0

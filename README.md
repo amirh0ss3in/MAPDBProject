@@ -54,4 +54,6 @@ Throughput is measured independently on both sides: producer→Kafka (end-offset
 
 ![Producer vs Spark throughput and processing backlog at 0.5x/1x/2x the DAQ target](benchmarks/benchmark.png)
 
-Backlog is a genuine sawtooth — Spark commits in discrete micro-batches, sampled every 2 s — so the moving average is what actually shows the trend: flat at every rate, never climbing. Raw logs, the plotting script, and this figure are in `benchmarks/`.
+Backlog is a genuine sawtooth — Spark commits in discrete micro-batches, sampled every 2 s — so the moving average is what actually shows the trend: flat at every rate, never climbing.
+
+To reproduce: `cd Project/benchmarks && ./run_benchmark.sh` runs all three rates end-to-end (~6 min) and regenerates `benchmark.png`. It's a thin wrapper around `backlog_probe.py` (logs Kafka offsets) and `plot_benchmark.py` (renders the figure) — see `backlog_probe.py`'s docstring for the manual step-by-step if you want to run a single rate.
